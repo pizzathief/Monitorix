@@ -18,7 +18,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-package mysql;
+package postgres;
 
 use strict;
 use warnings;
@@ -26,20 +26,20 @@ use Monitorix;
 use RRDs;
 use DBI;
 use Exporter 'import';
-our @EXPORT = qw(mysql_init mysql_update mysql_cgi);
+our @EXPORT = qw(postgres_init postgres_update postgres_cgi);
 
-sub mysql_init {
+sub postgres_init {
 	my $myself = (caller(0))[3];
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
-	my $mysql = $config->{mysql};
+	my $postgres = $config->{postgres};
 
 	my $info;
 	my @ds;
 	my @tmp;
 	my $n;
 
-	if(!grep {$_ eq lc($mysql->{conn_type})} ("host", "socket")) {
+	if(!grep {$_ eq lc($postgres->{conn_type})} ("host", "socket")) {
 		logger("$myself: ERROR: invalid value in 'conn_type' option.");
 		return;
 	}
@@ -53,53 +53,53 @@ sub mysql_init {
 				}
 			}
 		}
-		if(scalar(@ds) / 38 != scalar(my @ml = split(',', $mysql->{list}))) {
-			logger("Detected size mismatch between 'list' (" . scalar(my @ml = split(',', $mysql->{list})) . ") and $rrd (" . scalar(@ds) / 38 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+		if(scalar(@ds) / 38 != scalar(my @ml = split(',', $postgres->{list}))) {
+			logger("Detected size mismatch between 'list' (" . scalar(my @ml = split(',', $postgres->{list})) . ") and $rrd (" . scalar(@ds) / 38 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
-		for($n = 0; $n < scalar(my @ml = split(',', $mysql->{list})); $n++) {
-			push(@tmp, "DS:mysql" . $n . "_queries:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_sq:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_tchr:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_qcu:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_ot:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_conns_u:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_conns:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_tlw:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_kbu:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_innbu:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_csel:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_ccom:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_cdel:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_cins:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_cinss:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_cupd:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_crep:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_creps:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_crol:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_acli:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_acon:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_brecv:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_bsent:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_qchr:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_cstmtex:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_tttd:GAUGE:120:0:100");
-			push(@tmp, "DS:mysql" . $n . "_val04:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val05:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val06:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val07:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val08:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val09:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val10:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val11:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val12:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val13:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val14:GAUGE:120:0:U");
-			push(@tmp, "DS:mysql" . $n . "_val15:GAUGE:120:0:U");
+		for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
+			push(@tmp, "DS:postgres" . $n . "_queries:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_sq:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_tchr:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_qcu:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_ot:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_conns_u:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_conns:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_tlw:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_kbu:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_innbu:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_csel:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_ccom:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_cdel:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_cins:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_cinss:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_cupd:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_crep:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_creps:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_crol:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_acli:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_acon:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_brecv:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_bsent:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_qchr:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_cstmtex:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_tttd:GAUGE:120:0:100");
+			push(@tmp, "DS:postgres" . $n . "_val04:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val05:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val06:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val07:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val08:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val09:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val10:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val11:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val12:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val13:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val14:GAUGE:120:0:U");
+			push(@tmp, "DS:postgres" . $n . "_val15:GAUGE:120:0:U");
 		}
 		eval {
 			RRDs::create($rrd,
@@ -137,26 +137,26 @@ sub mysql_init {
 	}
 
 	# Since 3.0.0 the new values are used (Query_cache_hit_rate, Com_stmt_execute)
-	for($n = 0; $n < scalar(my @ml = split(',', $mysql->{list})); $n++) {
+	for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
 		RRDs::tune($rrd,
-			"--data-source-rename=mysql" . $n . "_val01:mysql" . $n . "_qchr",
-			"--data-source-rename=mysql" . $n . "_val02:mysql" . $n . "_cstmtex",
-			"--data-source-rename=mysql" . $n . "_val03:mysql" . $n . "_tttd",
-			"--maximum=mysql" . $n . "_qchr:100",
-			"--maximum=mysql" . $n . "_tttd:100",
+			"--data-source-rename=postgres" . $n . "_val01:postgres" . $n . "_qchr",
+			"--data-source-rename=postgres" . $n . "_val02:postgres" . $n . "_cstmtex",
+			"--data-source-rename=postgres" . $n . "_val03:postgres" . $n . "_tttd",
+			"--maximum=postgres" . $n . "_qchr:100",
+			"--maximum=postgres" . $n . "_tttd:100",
 		);
 	}
 
-	$config->{mysql_hist} = ();
+	$config->{postgres_hist} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
 }
 
-sub mysql_update {
+sub postgres_update {
 	my $myself = (caller(0))[3];
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
-	my $mysql = $config->{mysql};
+	my $postgres = $config->{postgres};
 
 	my $str;
 	my $n = 0;
@@ -165,36 +165,36 @@ sub mysql_update {
 	my $print_error = 0;
 	$print_error = 1 if $debug;
 
-	for($n = 0; $n < scalar(my @ml = split(',', $mysql->{list})); $n++) {
+	for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
 		my $host = $ml[$n];
 		my $sock = $ml[$n];
-		my $port = trim((split(',', $mysql->{desc}->{$ml[$n]}))[0]);
-		my $user = trim((split(',', $mysql->{desc}->{$ml[$n]}))[1]);
-		my $pass = trim((split(',', $mysql->{desc}->{$ml[$n]}))[2]);
+		my $port = trim((split(',', $postgres->{desc}->{$ml[$n]}))[0]);
+		my $user = trim((split(',', $postgres->{desc}->{$ml[$n]}))[1]);
+		my $pass = trim((split(',', $postgres->{desc}->{$ml[$n]}))[2]);
 		my $dbh;
-		if(lc($mysql->{conn_type}) eq "host") {
+		if(lc($postgres->{conn_type}) eq "host") {
 			unless ($host && $port && $user && $pass) {
 				logger("$myself: ERROR: undefined configuration in 'host' connection.");
 				next;
 			}
 			$dbh = DBI->connect(
-				"DBI:mysql:host=$host;port=$port",
+				"DBI:Pg:host=$host;port=$port",
 				$user,
 				$pass,
 				{ PrintError => $print_error, }
-			) or logger("$myself: Cannot connect to MySQL '$host:$port'.") and next;
+			) or logger("$myself: Cannot connect to Postgres '$host:$port'.") and next;
 		}
-		if(lc($mysql->{conn_type}) eq "socket") {
+		if(lc($postgres->{conn_type}) eq "socket") {
 			unless ($sock) {
 				logger("$myself: ERROR: undefined configuration in 'socket' connection");
 				next;
 			}
 			$dbh = DBI->connect(
-				"DBI:mysql:mysql_socket=$sock",
+				"DBI:Pg:postgres_socket=$sock",
 				$user,
 				$pass,
 				{ PrintError => $print_error, }
-			) or logger("$myself: Cannot connect to MySQL '$sock'.") and next;
+			) or logger("$myself: Cannot connect to Postgres '$sock'.") and next;
 		}
 
 		# SHOW GLOBAL STATUS
@@ -237,25 +237,25 @@ sub mysql_update {
 		while(my ($name, $value) = $sth->fetchrow_array) {
 			if($name eq "Aborted_clients") {
 				$str = $n . "aborted_clients";
-				$aborted_clients = $value - ($config->{mysql_hist}->{$str} || 0);
+				$aborted_clients = $value - ($config->{postgres_hist}->{$str} || 0);
 				$aborted_clients = 0 unless $aborted_clients != $value;
 				$aborted_clients /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Aborted_connects") {
 				$str = $n . "aborted_connects";
-				$aborted_connects = $value - ($config->{mysql_hist}->{$str} || 0);
+				$aborted_connects = $value - ($config->{postgres_hist}->{$str} || 0);
 				$aborted_connects = 0 unless $aborted_connects != $value;
 				$aborted_connects /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Connections") {
 				$str = $n . "connections";
 				$connections_real = int($value);
-				$connections = $value - ($config->{mysql_hist}->{$str} || 0);
+				$connections = $value - ($config->{postgres_hist}->{$str} || 0);
 				$connections = 0 unless $connections != $value;
 				$connections /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Innodb_buffer_pool_pages_free") {
 				$innodb_buffer_pool_pages_free = int($value);
@@ -274,10 +274,10 @@ sub mysql_update {
 			}
 			if($name eq "Opened_tables") {
 				$str = $n . "opened_tables";
-				$opened_tables = $value - ($config->{mysql_hist}->{$str} || 0);
+				$opened_tables = $value - ($config->{postgres_hist}->{$str} || 0);
 				$opened_tables = 0 unless $opened_tables != $value;
 #				$opened_tables /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Qcache_free_memory") {
 				$qcache_free_memory = int($value);
@@ -290,24 +290,24 @@ sub mysql_update {
 			}
 			if($name eq "Queries") {
 				$str = $n . "queries";
-				$queries = $value - ($config->{mysql_hist}->{$str} || 0);
+				$queries = $value - ($config->{postgres_hist}->{$str} || 0);
 				$queries = 0 unless $queries != $value;
 				$queries /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Slow_queries") {
 				$str = $n . "slow_queries";
-				$slow_queries = $value - ($config->{mysql_hist}->{$str} || 0);
+				$slow_queries = $value - ($config->{postgres_hist}->{$str} || 0);
 				$slow_queries = 0 unless $slow_queries != $value;
 				$slow_queries /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Table_locks_waited") {
 				$str = $n . "table_locks_waited";
-				$table_locks_waited = $value - ($config->{mysql_hist}->{$str} || 0);
+				$table_locks_waited = $value - ($config->{postgres_hist}->{$str} || 0);
 				$table_locks_waited = 0 unless $table_locks_waited != $value;
 #				$table_locks_waited /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Threads_created") {
 				$threads_created = int($value);
@@ -321,89 +321,89 @@ sub mysql_update {
 
 			if($name eq "Bytes_received") {
 				$str = $n . "bytes_received";
-				$bytes_received = $value - ($config->{mysql_hist}->{$str} || 0);
+				$bytes_received = $value - ($config->{postgres_hist}->{$str} || 0);
 				$bytes_received = 0 unless $bytes_received != $value;
 				$bytes_received /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Bytes_sent") {
 				$str = $n . "bytes_sent";
-				$bytes_sent = $value - ($config->{mysql_hist}->{$str} || 0);
+				$bytes_sent = $value - ($config->{postgres_hist}->{$str} || 0);
 				$bytes_sent = 0 unless $bytes_sent != $value;
 				$bytes_sent /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_commit") {
 				$str = $n . "com_commit";
-				$com_commit = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_commit = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_commit = 0 unless $com_commit != $value;
 				$com_commit /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_delete") {
 				$str = $n . "com_delete";
-				$com_delete = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_delete = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_delete = 0 unless $com_delete != $value;
 				$com_delete /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_insert") {
 				$str = $n . "com_insert";
-				$com_insert = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_insert = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_insert = 0 unless $com_insert != $value;
 				$com_insert /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_insert_select") {
 				$str = $n . "com_insert_s";
-				$com_insert_s = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_insert_s = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_insert_s = 0 unless $com_insert_s != $value;
 				$com_insert_s /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_replace") {
 				$str = $n . "com_replace";
-				$com_replace = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_replace = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_replace = 0 unless $com_replace != $value;
 				$com_replace /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_replace_select") {
 				$str = $n . "com_replace_s";
-				$com_replace_s = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_replace_s = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_replace_s = 0 unless $com_replace_s != $value;
 				$com_replace_s /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_rollback") {
 				$str = $n . "com_rollback";
-				$com_rollback = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_rollback = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_rollback = 0 unless $com_rollback != $value;
 				$com_rollback /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_select") {
 				$str = $n . "com_select";
 				$Com_select = $value;
 				$value += $qcache_hits;
-				$com_select = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_select = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_select = 0 unless $com_select != $value;
 				$com_select /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_update") {
 				$str = $n . "com_update";
-				$com_update = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_update = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_update = 0 unless $com_update != $value;
 				$com_update /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 			if($name eq "Com_stmt_execute") {
 				$str = $n . "com_stmtex";
-				$com_stmtex = $value - ($config->{mysql_hist}->{$str} || 0);
+				$com_stmtex = $value - ($config->{postgres_hist}->{$str} || 0);
 				$com_stmtex = 0 unless $com_stmtex != $value;
 				$com_stmtex /= 60;
-				$config->{mysql_hist}->{$str} = $value;
+				$config->{postgres_hist}->{$str} = $value;
 			}
 		}
 		$sth->finish;
@@ -461,12 +461,12 @@ sub mysql_update {
 	logger("ERROR: while updating $rrd: $err") if $err;
 }
 
-sub mysql_cgi {
+sub postgres_cgi {
 	my ($package, $config, $cgi) = @_;
 
-	my $mysql = $config->{mysql};
-	my @rigid = split(',', $mysql->{rigid});
-	my @limit = split(',', $mysql->{limit});
+	my $postgres = $config->{postgres};
+	my @rigid = split(',', $postgres->{rigid});
+	my @limit = split(',', $postgres->{limit});
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
@@ -520,16 +520,16 @@ sub mysql_cgi {
 		my $line3;
 		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		print("    ");
-		for($n = 0; $n < scalar(my @ml = split(',', $mysql->{list})); $n++) {
+		for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
 			$line1 = "                                                                                                                                                                                                                          ";
 			$line2 .= "   Select  Commit  Delete  Insert  Insert_S  Update  Replace  Replace_S  Rollback  TCacheHit  QCache_U  Conns_U  KeyBuf_U  InnoDB_U  OpenedTbl  TLocks_W  Queries  SlowQrs  Conns  AbrtCli  AbrtConn  BytesRecv  BytesSent QCacheHitR StmtExec TmpTbToDsk";
 			$line3 .= "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------";
 			if($line1) {
 				my $i = length($line1);
-				if(lc($mysql->{conn_type}) eq "host") {
-					printf(sprintf("%${i}s", sprintf("%s:%s", $ml[$n], trim((split(',', $mysql->{desc}->{$ml[$n]}))[0]))));
+				if(lc($postgres->{conn_type}) eq "host") {
+					printf(sprintf("%${i}s", sprintf("%s:%s", $ml[$n], trim((split(',', $postgres->{desc}->{$ml[$n]}))[0]))));
 				}
-				if(lc($mysql->{conn_type}) eq "socket") {
+				if(lc($postgres->{conn_type}) eq "socket") {
 					printf(sprintf("%${i}s", sprintf("socket: %s", $ml[$n])));
 				}
 			}
@@ -547,7 +547,7 @@ sub mysql_cgi {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
 			printf(" %2d$tf->{tc}", $time);
-			for($n2 = 0; $n2 < scalar(my @ml = split(',', $mysql->{list})); $n2++) {
+			for($n2 = 0; $n2 < scalar(my @ml = split(',', $postgres->{list})); $n2++) {
 				undef(@row);
 				$from = $n2 * 38;
 				$to = $from + 38;
@@ -578,7 +578,7 @@ sub mysql_cgi {
 		$u = "";
 	}
 
-	for($n = 0; $n < scalar(my @ml = split(',', $mysql->{list})); $n++) {
+	for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
 		for($n2 = 1; $n2 <= 6; $n2++) {
 			my $str = $u . $package . $n . $n2 . "." . $tf->{when} . ".png";
 			push(@PNG, $str);
@@ -592,12 +592,12 @@ sub mysql_cgi {
 	}
 
 	$e = 0;
-	foreach (my @ml = split(',', $mysql->{list})) {
+	foreach (my @ml = split(',', $postgres->{list})) {
 		my $uri;
-		if(lc($mysql->{conn_type}) eq "host") {
-	        	$uri = $_ . ":" . trim((split(',', $mysql->{desc}->{$_}))[0]);
+		if(lc($postgres->{conn_type}) eq "host") {
+	        	$uri = $_ . ":" . trim((split(',', $postgres->{desc}->{$_}))[0]);
 		}
-		if(lc($mysql->{conn_type}) eq "socket") {
+		if(lc($postgres->{conn_type}) eq "socket") {
 	        	$uri = "socket: " . $_;
 		}
 
@@ -691,7 +691,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6]",
-			"--title=$config->{graphs}->{_mysql1}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=Queries/s",
@@ -701,23 +701,23 @@ sub mysql_cgi {
 			"--lower-limit=0",
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
-			"DEF:com_select=$rrd:mysql" . $e . "_csel:AVERAGE",
-			"DEF:com_commit=$rrd:mysql" . $e . "_ccom:AVERAGE",
-			"DEF:com_delete=$rrd:mysql" . $e . "_cdel:AVERAGE",
-			"DEF:com_insert=$rrd:mysql" . $e . "_cins:AVERAGE",
-			"DEF:com_insert_s=$rrd:mysql" . $e . "_cinss:AVERAGE",
-			"DEF:com_update=$rrd:mysql" . $e . "_cupd:AVERAGE",
-			"DEF:com_replace=$rrd:mysql" . $e . "_crep:AVERAGE",
-			"DEF:com_replace_s=$rrd:mysql" . $e . "_creps:AVERAGE",
-			"DEF:com_rollback=$rrd:mysql" . $e . "_crol:AVERAGE",
-			"DEF:com_stmtex=$rrd:mysql" . $e . "_cstmtex:AVERAGE",
+			"DEF:com_select=$rrd:postgres" . $e . "_csel:AVERAGE",
+			"DEF:com_commit=$rrd:postgres" . $e . "_ccom:AVERAGE",
+			"DEF:com_delete=$rrd:postgres" . $e . "_cdel:AVERAGE",
+			"DEF:com_insert=$rrd:postgres" . $e . "_cins:AVERAGE",
+			"DEF:com_insert_s=$rrd:postgres" . $e . "_cinss:AVERAGE",
+			"DEF:com_update=$rrd:postgres" . $e . "_cupd:AVERAGE",
+			"DEF:com_replace=$rrd:postgres" . $e . "_crep:AVERAGE",
+			"DEF:com_replace_s=$rrd:postgres" . $e . "_creps:AVERAGE",
+			"DEF:com_rollback=$rrd:postgres" . $e . "_crol:AVERAGE",
+			"DEF:com_stmtex=$rrd:postgres" . $e . "_cstmtex:AVERAGE",
 			@tmp);
 		$err = RRDs::error;
 		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 6]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6]",
-				"--title=$config->{graphs}->{_mysql1}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres1}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=Queries/s",
@@ -727,22 +727,22 @@ sub mysql_cgi {
 				"--lower-limit=0",
 				@{$cgi->{version12}},
 				@{$colors->{graph_colors}},
-				"DEF:com_select=$rrd:mysql" . $e . "_csel:AVERAGE",
-				"DEF:com_commit=$rrd:mysql" . $e . "_ccom:AVERAGE",
-				"DEF:com_delete=$rrd:mysql" . $e . "_cdel:AVERAGE",
-				"DEF:com_insert=$rrd:mysql" . $e . "_cins:AVERAGE",
-				"DEF:com_insert_s=$rrd:mysql" . $e . "_cinss:AVERAGE",
-				"DEF:com_update=$rrd:mysql" . $e . "_cupd:AVERAGE",
-				"DEF:com_replace=$rrd:mysql" . $e . "_crep:AVERAGE",
-				"DEF:com_replace_s=$rrd:mysql" . $e . "_creps:AVERAGE",
-				"DEF:com_rollback=$rrd:mysql" . $e . "_crol:AVERAGE",
-				"DEF:com_stmtex=$rrd:mysql" . $e . "_cstmtex:AVERAGE",
+				"DEF:com_select=$rrd:postgres" . $e . "_csel:AVERAGE",
+				"DEF:com_commit=$rrd:postgres" . $e . "_ccom:AVERAGE",
+				"DEF:com_delete=$rrd:postgres" . $e . "_cdel:AVERAGE",
+				"DEF:com_insert=$rrd:postgres" . $e . "_cins:AVERAGE",
+				"DEF:com_insert_s=$rrd:postgres" . $e . "_cinss:AVERAGE",
+				"DEF:com_update=$rrd:postgres" . $e . "_cupd:AVERAGE",
+				"DEF:com_replace=$rrd:postgres" . $e . "_crep:AVERAGE",
+				"DEF:com_replace_s=$rrd:postgres" . $e . "_creps:AVERAGE",
+				"DEF:com_rollback=$rrd:postgres" . $e . "_crol:AVERAGE",
+				"DEF:com_stmtex=$rrd:postgres" . $e . "_cstmtex:AVERAGE",
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6]: $err\n") if $err;
 		}
 		$e2 = $e + 1;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6] . "' border='0'></a>\n");
@@ -817,7 +817,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6 + 1]",
-			"--title=$config->{graphs}->{_mysql2}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=Percent (%)",
@@ -827,20 +827,20 @@ sub mysql_cgi {
 			"--lower-limit=0",
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
-			"DEF:tcache_hit_r=$rrd:mysql" . $e . "_tchr:AVERAGE",
-			"DEF:qcache_hitr=$rrd:mysql" . $e . "_qchr:AVERAGE",
-			"DEF:qcache_usage=$rrd:mysql" . $e . "_qcu:AVERAGE",
-			"DEF:conns_u=$rrd:mysql" . $e . "_conns_u:AVERAGE",
-			"DEF:key_buf_u=$rrd:mysql" . $e . "_kbu:AVERAGE",
-			"DEF:innodb_buf_u=$rrd:mysql" . $e . "_innbu:AVERAGE",
-			"DEF:tmptbltodsk=$rrd:mysql" . $e . "_tttd:AVERAGE",
+			"DEF:tcache_hit_r=$rrd:postgres" . $e . "_tchr:AVERAGE",
+			"DEF:qcache_hitr=$rrd:postgres" . $e . "_qchr:AVERAGE",
+			"DEF:qcache_usage=$rrd:postgres" . $e . "_qcu:AVERAGE",
+			"DEF:conns_u=$rrd:postgres" . $e . "_conns_u:AVERAGE",
+			"DEF:key_buf_u=$rrd:postgres" . $e . "_kbu:AVERAGE",
+			"DEF:innodb_buf_u=$rrd:postgres" . $e . "_innbu:AVERAGE",
+			"DEF:tmptbltodsk=$rrd:postgres" . $e . "_tttd:AVERAGE",
 			@tmp);
 		$err = RRDs::error;
 		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 6 + 1]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6 + 1]",
-				"--title=$config->{graphs}->{_mysql2}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres2}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=Percent (%)",
@@ -850,19 +850,19 @@ sub mysql_cgi {
 				"--lower-limit=0",
 				@{$cgi->{version12}},
 				@{$colors->{graph_colors}},
-				"DEF:tcache_hit_r=$rrd:mysql" . $e . "_tchr:AVERAGE",
-				"DEF:qcache_hitr=$rrd:mysql" . $e . "_qchr:AVERAGE",
-				"DEF:qcache_usage=$rrd:mysql" . $e . "_qcu:AVERAGE",
-				"DEF:conns_u=$rrd:mysql" . $e . "_conns_u:AVERAGE",
-				"DEF:key_buf_u=$rrd:mysql" . $e . "_kbu:AVERAGE",
-				"DEF:innodb_buf_u=$rrd:mysql" . $e . "_innbu:AVERAGE",
-				"DEF:tmptbltodsk=$rrd:mysql" . $e . "_tttd:AVERAGE",
+				"DEF:tcache_hit_r=$rrd:postgres" . $e . "_tchr:AVERAGE",
+				"DEF:qcache_hitr=$rrd:postgres" . $e . "_qchr:AVERAGE",
+				"DEF:qcache_usage=$rrd:postgres" . $e . "_qcu:AVERAGE",
+				"DEF:conns_u=$rrd:postgres" . $e . "_conns_u:AVERAGE",
+				"DEF:key_buf_u=$rrd:postgres" . $e . "_kbu:AVERAGE",
+				"DEF:innodb_buf_u=$rrd:postgres" . $e . "_innbu:AVERAGE",
+				"DEF:tmptbltodsk=$rrd:postgres" . $e . "_tttd:AVERAGE",
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6 + 1]: $err\n") if $err;
 		}
 		$e2 = $e + 2;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6 + 1] . "' border='0'></a>\n");
@@ -911,7 +911,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6 + 2]",
-			"--title=$config->{graphs}->{_mysql3}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=Open & Locks/min",
@@ -922,15 +922,15 @@ sub mysql_cgi {
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
-			"DEF:opened_tbl=$rrd:mysql" . $e . "_ot:AVERAGE",
-			"DEF:tlocks_w=$rrd:mysql" . $e . "_tlw:AVERAGE",
+			"DEF:opened_tbl=$rrd:postgres" . $e . "_ot:AVERAGE",
+			"DEF:tlocks_w=$rrd:postgres" . $e . "_tlw:AVERAGE",
 			@tmp);
 		$err = RRDs::error;
 		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 6 + 2]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6 + 2]",
-				"--title=$config->{graphs}->{_mysql3}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres3}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=Open & Locks/min",
@@ -941,14 +941,14 @@ sub mysql_cgi {
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
-				"DEF:opened_tbl=$rrd:mysql" . $e . "_ot:AVERAGE",
-				"DEF:tlocks_w=$rrd:mysql" . $e . "_tlw:AVERAGE",
+				"DEF:opened_tbl=$rrd:postgres" . $e . "_ot:AVERAGE",
+				"DEF:tlocks_w=$rrd:postgres" . $e . "_tlw:AVERAGE",
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6 + 2]: $err\n") if $err;
 		}
 		$e2 = $e + 3;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6 + 2] . "' border='0'></a>\n");
@@ -993,7 +993,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6 + 3]",
-			"--title=$config->{graphs}->{_mysql4}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres4}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=Queries/s",
@@ -1004,15 +1004,15 @@ sub mysql_cgi {
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
-			"DEF:qrs=$rrd:mysql" . $e . "_queries:AVERAGE",
-			"DEF:sqrs=$rrd:mysql" . $e . "_sq:AVERAGE",
+			"DEF:qrs=$rrd:postgres" . $e . "_queries:AVERAGE",
+			"DEF:sqrs=$rrd:postgres" . $e . "_sq:AVERAGE",
 			@tmp);
 		$err = RRDs::error;
 		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 6 + 3]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6 + 3]",
-				"--title=$config->{graphs}->{_mysql4}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres4}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=Queries/s",
@@ -1023,14 +1023,14 @@ sub mysql_cgi {
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
-				"DEF:qrs=$rrd:mysql" . $e . "_queries:AVERAGE",
-				"DEF:sqrs=$rrd:mysql" . $e . "_sq:AVERAGE",
+				"DEF:qrs=$rrd:postgres" . $e . "_queries:AVERAGE",
+				"DEF:sqrs=$rrd:postgres" . $e . "_sq:AVERAGE",
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6 + 3]: $err\n") if $err;
 		}
 		$e2 = $e + 4;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6 + 3] . "' border='0'></a>\n");
@@ -1080,7 +1080,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6 + 4]",
-			"--title=$config->{graphs}->{_mysql5}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres5}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=Connectionss/s",
@@ -1091,16 +1091,16 @@ sub mysql_cgi {
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
-			"DEF:conns=$rrd:mysql" . $e . "_conns:AVERAGE",
-			"DEF:acli=$rrd:mysql" . $e . "_acli:AVERAGE",
-			"DEF:acon=$rrd:mysql" . $e . "_acon:AVERAGE",
+			"DEF:conns=$rrd:postgres" . $e . "_conns:AVERAGE",
+			"DEF:acli=$rrd:postgres" . $e . "_acli:AVERAGE",
+			"DEF:acon=$rrd:postgres" . $e . "_acon:AVERAGE",
 			@tmp);
 		$err = RRDs::error;
 		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 6 + 4]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6 + 4]",
-				"--title=$config->{graphs}->{_mysql5}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres5}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=Connectionss/s",
@@ -1111,15 +1111,15 @@ sub mysql_cgi {
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
-				"DEF:conns=$rrd:mysql" . $e . "_conns:AVERAGE",
-				"DEF:acli=$rrd:mysql" . $e . "_acli:AVERAGE",
-				"DEF:acon=$rrd:mysql" . $e . "_acon:AVERAGE",
+				"DEF:conns=$rrd:postgres" . $e . "_conns:AVERAGE",
+				"DEF:acli=$rrd:postgres" . $e . "_acli:AVERAGE",
+				"DEF:acon=$rrd:postgres" . $e . "_acon:AVERAGE",
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6 + 4]: $err\n") if $err;
 		}
 		$e2 = $e + 5;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6 + 4] . "' border='0'></a>\n");
@@ -1173,7 +1173,7 @@ sub mysql_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		RRDs::graph("$PNG_DIR" . "$PNG[$e * 6 + 5]",
-			"--title=$config->{graphs}->{_mysql6}  ($tf->{nwhen}$tf->{twhen})",
+			"--title=$config->{graphs}->{_postgres6}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=PNG",
 			"--vertical-label=$vlabel",
@@ -1184,8 +1184,8 @@ sub mysql_cgi {
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
-			"DEF:in=$rrd:mysql" . $e . "_brecv:AVERAGE",
-			"DEF:out=$rrd:mysql" . $e . "_bsent:AVERAGE",
+			"DEF:in=$rrd:postgres" . $e . "_brecv:AVERAGE",
+			"DEF:out=$rrd:postgres" . $e . "_bsent:AVERAGE",
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
@@ -1193,7 +1193,7 @@ sub mysql_cgi {
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 6 + 5]",
-				"--title=$config->{graphs}->{_mysql6}  ($tf->{nwhen}$tf->{twhen})",
+				"--title=$config->{graphs}->{_postgres6}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=PNG",
 				"--vertical-label=$vlabel",
@@ -1204,15 +1204,15 @@ sub mysql_cgi {
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
-				"DEF:in=$rrd:mysql" . $e . "_brecv:AVERAGE",
-				"DEF:out=$rrd:mysql" . $e . "_bsent:AVERAGE",
+				"DEF:in=$rrd:postgres" . $e . "_brecv:AVERAGE",
+				"DEF:out=$rrd:postgres" . $e . "_bsent:AVERAGE",
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
 			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 6 + 5]: $err\n") if $err;
 		}
 		$e2 = $e + 6;
-		if($title || ($silent =~ /imagetag/ && $graph =~ /mysql$e2/)) {
+		if($title || ($silent =~ /imagetag/ && $graph =~ /postgres$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
 					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 6 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 6 + 5] . "' border='0'></a>\n");
