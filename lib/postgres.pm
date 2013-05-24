@@ -178,7 +178,7 @@ sub postgres_update {
 				next;
 			}
 			$dbh = DBI->connect(
-				"DBI:Pg:host=$host;port=$port",
+				"DBI:Pg:dbname=$dbname;host=$host;port=$port"
 				$user,
 				$pass,
 				{ PrintError => $print_error, }
