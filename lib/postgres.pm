@@ -166,11 +166,12 @@ sub postgres_update {
 	$print_error = 1 if $debug;
 
 	for($n = 0; $n < scalar(my @ml = split(',', $postgres->{list})); $n++) {
-		my $host = $ml[$n];
-		my $sock = $ml[$n];
-		my $port = trim((split(',', $postgres->{desc}->{$ml[$n]}))[0]);
-		my $user = trim((split(',', $postgres->{desc}->{$ml[$n]}))[1]);
-		my $pass = trim((split(',', $postgres->{desc}->{$ml[$n]}))[2]);
+		my $host   = $ml[$n];
+		my $sock   = $ml[$n];
+		my $port   = trim((split(',', $postgres->{desc}->{$ml[$n]}))[0]);
+		my $dbname = trim((split(',', $postgres->{desc}->{$ml[$n]}))[1]);
+		my $user   = trim((split(',', $postgres->{desc}->{$ml[$n]}))[2]);
+		my $pass   = trim((split(',', $postgres->{desc}->{$ml[$n]}))[3]);
 		my $dbh;
 		if(lc($postgres->{conn_type}) eq "host") {
 			unless ($host && $port && $user && $pass) {
@@ -178,11 +179,11 @@ sub postgres_update {
 				next;
 			}
 			$dbh = DBI->connect(
-				"DBI:Pg:dbname=$dbname;host=$host;port=$port"
+				"DBI:Pg:dbname=$dbname;host=$host;port=$port",
 				$user,
 				$pass,
 				{ PrintError => $print_error, }
-			) or logger("$myself: Cannot connect to Postgres '$host:$port'.") and next;
+			) or logger("$myself: Cannot connect to Postgres '$host:$port $user'.") and next;
 		}
 		if(lc($postgres->{conn_type}) eq "socket") {
 			unless ($sock) {
@@ -451,6 +452,12 @@ sub postgres_update {
 			$qcache_hit_rate = $qcache_hits / ($qcache_hits + $Com_select) * 100;
 		}
 		$temp_tables_to_disk = $created_tmp_disk_tables / ($created_tmp_disk_tables + $created_tmp_tables) * 100;
+                if($created_tmp_disk_tables + $created_tmp_tables > 0) {
+	                $temp_tables_to_disk = $created_tmp_disk_tables / ($created_tmp_disk_tables + $created_tmp_tables) * 100;
+                } else {
+                        $temp_tables_to_disk = 0;
+                }
+
 
 		$rrdata .= ":$queries:$slow_queries:$tcache_hit_rate:$qcache_usage:$opened_tables:$connections_usage:$connections:$table_locks_waited:$key_buffer_usage:$innodb_buffer_pool_usage:$com_select:$com_commit:$com_delete:$com_insert:$com_insert_s:$com_update:$com_replace:$com_replace_s:$com_rollback:$aborted_clients:$aborted_connects:$bytes_received:$bytes_sent:$qcache_hit_rate:$com_stmtex:$temp_tables_to_disk:0:0:0:0:0:0:0:0:0:0:0:0";
 	}
