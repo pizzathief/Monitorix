@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -38,8 +38,16 @@ sub traffacct_init {
 
 	my $info;
 	my @ds;
+	my @rra;
 	my @tmp;
 	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	my $table = $config->{ip_default_table};
 
 	if(!grep {$_ eq $config->{os}} ("Linux")) {
 		logger("$myself is not supported yet by your operating system ($config->{os}.");
@@ -54,15 +62,30 @@ sub traffacct_init {
 					push(@ds, substr($key, 3, index($key, ']') - 3));
 				}
 			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
 		}
 		if(scalar(@ds) / 2 != $traffacct->{max}) {
-			logger("Detected size mismatch between 'max = $traffacct->{max}' and $rrd (" . scalar(@ds) / 2 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+			logger("$myself: Detected size mismatch between 'max = $traffacct->{max}' and $rrd (" . scalar(@ds) / 2 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		for($n = 0; $n < $traffacct->{max}; $n++) {
 			push(@tmp, "DS:traffacct" . $n . "_in:GAUGE:120:0:U");
 			push(@tmp, "DS:traffacct" . $n . "_out:GAUGE:120:0:U");
@@ -74,19 +97,19 @@ sub traffacct_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -104,7 +127,7 @@ sub traffacct_init {
 
 	if($config->{os} eq "Linux") {
 		if(!$config->{net}->{gateway}) {
-			logger("ERROR: You must assign a valid ethernet interface in 'net->gateway'");
+			logger("$myself: ERROR: You must assign a valid ethernet interface in 'net->gateway'");
 			return;
 		}
 		# set the iptables rules for each defined host/network
@@ -123,14 +146,14 @@ sub traffacct_init {
 					$ip = inet_ntoa((gethostbyname($name))[4]);
 					$ip = $ip . "/32";
 				}
-				open(IN, "iptables -nxvL monitorix_daily_$name 2>/dev/null |");
+				open(IN, "iptables -t $table -nxvL monitorix_daily_$name 2>/dev/null |");
 				my @data = <IN>;
 				close(IN);
 				if(!scalar(@data)) {
-					system("iptables -N monitorix_daily_$name");
-					system("iptables -I FORWARD -j monitorix_daily_$name");
-					system("iptables -A monitorix_daily_$name -s $ip -d 0/0 -o $config->{net}->{gateway}");
-					system("iptables -A monitorix_daily_$name -s 0/0 -d $ip -i $config->{net}->{gateway}");
+					system("iptables -t $table -N monitorix_daily_$name");
+					system("iptables -t $table -I FORWARD -j monitorix_daily_$name");
+					system("iptables -t $table -A monitorix_daily_$name -s $ip -d 0/0 -o $config->{net}->{gateway}");
+					system("iptables -t $table -A monitorix_daily_$name -s 0/0 -d $ip -i $config->{net}->{gateway}");
 				}
 			}
 		}
@@ -156,6 +179,7 @@ sub traffacct_update {
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $traffacct = $config->{traffacct};
 
+	my $table = $config->{ip_default_table};
 	my @in;
 	my @out;
 
@@ -177,7 +201,7 @@ sub traffacct_update {
 				$ip = inet_ntoa((gethostbyname($name))[4]);
 			}
 			$ip =~ s/\/\d+//;
-			open(IN, "iptables -nxvL monitorix_daily_$name |");
+			open(IN, "iptables -t $table -nxvL monitorix_daily_$name |");
 			$in[$n] = 0 unless $in[$n];
 			$out[$n] = 0 unless $out[$n];
 			while(<IN>) {
@@ -292,15 +316,20 @@ sub traffacct_sendreports {
 	my $myself = (caller(0))[3];
 	my ($config, $debug) = @_;
 	my $traffacct = $config->{traffacct};
+	my $imgfmt_lc = lc($config->{image_format});
 
 	my (undef, undef, undef, undef, $prev_month, $prev_year) = localtime(time - 3600);
 	my $n;
+	my $mime;
 
 	my $usage_dir = $config->{base_lib} . $config->{usage_dir};
 	my $report_dir = $config->{base_lib} . $config->{report_dir};
 	my $base_url = $config->{base_url};
 	my $base_cgi = $config->{base_cgi};
 	my $imgs_dir = $config->{imgs_dir};
+
+	$mime = "image/png";
+	$mime = "image/svg+xml" if uc($config->{image_format}) eq "SVG";
 
 	logger("Sending monthly network traffic reports.");
 
@@ -338,10 +367,17 @@ sub traffacct_sendreports {
 		$to = $traffacct->{reports}->{default_mail} unless $to;
 
 		# get the monthly graph
-		my $url = "http://127.0.0.1" . $base_cgi . "/monitorix.cgi?mode=traffacct.$n&graph=all&when=1month&color=&silent=imagetagbig";
-		my $ua = LWP::UserAgent->new(timeout => 30);
+		my $url = $traffacct->{reports}->{url_prefix} . $base_cgi . "/monitorix.cgi?mode=traffacct.$n&graph=all&when=1month&color=&silent=imagetagbig";
+		my $ssl = "";
+
+		$ssl = "ssl_opts => {verify_hostname => 0}"
+			if lc($config->{accept_selfsigned_certs}) eq "y";
+
+		my $ua = LWP::UserAgent->new(timeout => 30, $ssl);
+		$ua->agent($config->{user_agent_id}) if $config->{user_agent_id} || "";
 		$ua->request(HTTP::Request->new('GET', $url));
-		$url = "http://127.0.0.1" . $base_url . "/" . $imgs_dir . "traffacct" . $n . ".1month.png";
+
+		$url = $traffacct->{reports}->{url_prefix} . $base_url . "/" . $imgs_dir . "traffacct" . $n . ".1month.$imgfmt_lc";
 		my $image = $ua->request(HTTP::Request->new('GET', $url));
 		if(!$image->is_success) {
 			logger("$myself: ERROR: Unable to connect to '$url'.");
@@ -366,7 +402,7 @@ sub traffacct_sendreports {
 			Path		=> $config->{base_dir} . $config->{logo_bottom},
 		);
 		$msg->attach(
-			Type		=> 'image/png',
+			Type		=> $mime,
 			Id		=> 'image_02',
 			Data		=> $image->content,
 		);
@@ -388,19 +424,30 @@ sub traffacct_cgi {
 	my ($package, $config, $cgi) = @_;
 
 	my $traffacct = $config->{traffacct};
-	my @rigid = split(',', $traffacct->{rigid});
-	my @limit = split(',', $traffacct->{limit});
+	my @rigid = split(',', ($traffacct->{rigid} || ""));
+	my @limit = split(',', ($traffacct->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
+
 
 	my $u = "";
 	my $width;
 	my $height;
 	my @riglim;
-	my @PNG;
-	my @PNGz;
+	my @IMG;
+	my @IMGz;
 	my @tmp;
 	my @tmpz;
 	my @CDEF;
@@ -411,9 +458,12 @@ sub traffacct_cgi {
 	my $str;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	if(lc($config->{netstats_in_bps}) eq "y") {
 		$T = "b";
@@ -433,23 +483,16 @@ sub traffacct_cgi {
 	}
 
 	for($n = 0; $n < $traffacct->{max}; $n++) {
-		$str = $u . "traffacct" . $n . ".$tf->{when}" . ".png";
-		push(@PNG, $str);
-		unlink("$PNG_DIR" . $str);
+		$str = $u . "traffacct" . $n . ".$tf->{when}" . ".$imgfmt_lc";
+		push(@IMG, $str);
+		unlink("$IMG_DIR" . $str);
 		if(lc($config->{enable_zoom}) eq "y") {
-			$str = $u . "traffacct" . $n . "z.$tf->{when}" . ".png";
-			push(@PNGz, $str);
-			unlink("$PNG_DIR" . $str);
+			$str = $u . "traffacct" . $n . "z.$tf->{when}" . ".$imgfmt_lc";
+			push(@IMGz, $str);
+			unlink("$IMG_DIR" . $str);
 		}
 	}
-	if(trim($rigid[0]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[0]));
-	} else {
-		if(trim($rigid[0]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 
 	$traffacct->{graphs_per_row} = 1 unless $traffacct->{graphs_per_row} > 1;
 	my @tal = split(',', $traffacct->{list});
@@ -494,55 +537,68 @@ sub traffacct_cgi {
 					push(@CDEF, "CDEF:B_in=in");
 					push(@CDEF, "CDEF:B_out=out");
 				}
+				if(lc($config->{show_gaps}) eq "y") {
+					push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+					push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+					push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+				}
 				($width, $height) = split('x', $config->{graph_size}->{remote});
-				RRDs::graph("$PNG_DIR" . "$PNG[$n]",
+				$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$n]",
 					"--title=$name traffic  ($tf->{nwhen}$tf->{twhen})",
 					"--start=-$tf->{nwhen}$tf->{twhen}",
-					"--imgformat=PNG",
+					"--imgformat=$imgfmt_uc",
 					"--vertical-label=$vlabel",
 					"--width=$width",
 					"--height=$height",
 					@riglim,
-					"--lower-limit=0",
+					$zoom,
 					@{$cgi->{version12}},
 					@{$cgi->{version12_small}},
 					@{$colors->{graph_colors}},
 					"DEF:in=$rrd:traffacct" . $n . "_in:AVERAGE",
 					"DEF:out=$rrd:traffacct" . $n . "_out:AVERAGE",
+					"CDEF:allvalues=in,out,+",
 					@CDEF,
 					@tmp);
 				$err = RRDs::error;
-				print("ERROR: while graphing $PNG_DIR" . "$PNG[$n]: $err\n") if $err;
+				print("ERROR: while graphing $IMG_DIR" . "$IMG[$n]: $err\n") if $err;
 				if(lc($config->{enable_zoom}) eq "y") {
 					($width, $height) = split('x', $config->{graph_size}->{zoom});
-					RRDs::graph("$PNG_DIR" . "$PNGz[$n]",
+					$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$n]",
 						"--title=$name traffic  ($tf->{nwhen}$tf->{twhen})",
 						"--start=-$tf->{nwhen}$tf->{twhen}",
-						"--imgformat=PNG",
+						"--imgformat=$imgfmt_uc",
 						"--vertical-label=$vlabel",
 						"--width=$width",
 						"--height=$height",
 						@riglim,
-						"--lower-limit=0",
+						$zoom,
 						@{$cgi->{version12}},
 						@{$cgi->{version12_small}},
 						@{$colors->{graph_colors}},
 						"DEF:in=$rrd:traffacct" . $n . "_in:AVERAGE",
 						"DEF:out=$rrd:traffacct" . $n . "_out:AVERAGE",
+						"CDEF:allvalues=in,out,+",
 						@CDEF,
 						@tmpz);
 					$err = RRDs::error;
-					print("ERROR: while graphing $PNG_DIR" . "$PNGz[$n]: $err\n") if $err;
+					print("ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
 				}
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
-					}
-					else {
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
+						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
+					} else {
+						if($version eq "new") {
+							$picz_width = $picz->{image_width} * $config->{global_zoom};
+							$picz_height = $picz->{image_height} * $config->{global_zoom};
+						} else {
+							$picz_width = $width + 115;
+							$picz_height = $height + 100;
+						}
+						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "'>\n");
+					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "'>\n");
 				}
 				print("  </td>\n");
 				$n++;
@@ -594,57 +650,70 @@ sub traffacct_cgi {
 			push(@CDEF, "CDEF:B_in=in");
 			push(@CDEF, "CDEF:B_out=out");
 		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{main});
-		RRDs::graph("$PNG_DIR" . "$PNG[$cgi->{val}]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$cgi->{val}]",
 			"--title=$tal[$cgi->{val}] traffic  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:in=$rrd:traffacct" . $cgi->{val} . "_in:AVERAGE",
 			"DEF:out=$rrd:traffacct" . $cgi->{val} . "_out:AVERAGE",
+			"CDEF:allvalues=in,out,+",
 			@CDEF,
 			"CDEF:K_in=B_in,1024,/",
 			"CDEF:K_out=B_out,1024,/",
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$cgi->{val}]: $err\n") if $err;
+		print("ERROR: while graphing $IMG_DIR" . "$IMG[$cgi->{val}]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$cgi->{val}]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$cgi->{val}]",
 				"--title=$tal[$cgi->{val}] traffic  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$colors->{graph_colors}},
 				"DEF:in=$rrd:traffacct" . $cgi->{val} . "_in:AVERAGE",
 				"DEF:out=$rrd:traffacct" . $cgi->{val} . "_out:AVERAGE",
+				"CDEF:allvalues=in,out,+",
 				@CDEF,
 				"CDEF:K_in=B_in,1024,/",
 				"CDEF:K_out=B_out,1024,/",
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$cgi->{val}]: $err\n") if $err;
+			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$cgi->{val}]: $err\n") if $err;
 		}
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$cgi->{val}] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$cgi->{val}] . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$cgi->{val}] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$cgi->{val}] . "' border='0'></a>\n");
+				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$cgi->{val}] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$cgi->{val}] . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$cgi->{val}] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$cgi->{val}] . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$cgi->{val}] . "'>\n");
+			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$cgi->{val}] . "'>\n");
 		}
 		if(!$silent) {
 			print("  </td>\n");
@@ -654,3 +723,5 @@ sub traffacct_cgi {
 		}
 	}
 }
+
+1;

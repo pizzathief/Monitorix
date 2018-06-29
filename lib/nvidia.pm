@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -32,8 +32,46 @@ sub nvidia_init {
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 
+	my $info;
+	my @rra;
+	my @tmp;
+	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	# checks if 'nvidia-smi' does exists.
+	if(!open(IN, "nvidia-smi |")) {
+		logger("$myself: unable to execute 'nvidia-smi'. $!");
+		return;
+	}
+	close(IN);
+
+	if(-e $rrd) {
+		$info = RRDs::info($rrd);
+		for my $key (keys %$info) {
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+	}
+
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		eval {
 			RRDs::create($rrd,
 				"--step=60",
@@ -67,19 +105,19 @@ sub nvidia_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -95,8 +133,42 @@ sub nvidia_init {
 		}
 	}
 
+	$config->{nvidia_hist_alerts} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
+}
+
+sub nvidia_alerts {
+	my $myself = (caller(0))[3];
+	my $config = (shift);
+	my $sensor = (shift);
+	my $val = (shift);
+
+	my $nvidia = $config->{nvidia};
+	my @al = split(',', $nvidia->{alerts}->{$sensor} || "");
+
+	if(scalar(@al)) {
+		my $timeintvl = trim($al[0]);
+		my $threshold = trim($al[1]);
+		my $script = trim($al[2]);
+	
+		if(!$threshold || $val < $threshold) {
+			$config->{nvidia_hist_alerts}->{$sensor} = 0;
+		} else {
+			if(!$config->{nvidia_hist_alerts}->{$sensor}) {
+				$config->{nvidia_hist_alerts}->{$sensor} = time;
+			}
+			if($config->{nvidia_hist_alerts}->{$sensor} > 0 && (time - $config->{nvidia_hist_alerts}->{$sensor}) >= $timeintvl) {
+				if(-x $script) {
+					logger("$myself: alert on NVIDIA ($sensor): executing script '$script'.");
+					system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+				} else {
+					logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+				}
+				$config->{nvidia_hist_alerts}->{$sensor} = time;
+			}
+		}
+	}
 }
 
 sub nvidia_update {
@@ -178,12 +250,18 @@ sub nvidia_update {
 	}
 
 	for($n = 0; $n < scalar(@temp); $n++) {
+		# check alerts for each sensor defined
+		nvidia_alerts($config, "temp$n", $temp[$n]);
 		$rrdata .= ":$temp[$n]";
 	}
 	for($n = 0; $n < scalar(@gpu); $n++) {
+		# check alerts for each sensor defined
+		nvidia_alerts($config, "gpu$n", $gpu[$n]);
 		$rrdata .= ":$gpu[$n]";
 	}
 	for($n = 0; $n < scalar(@mem); $n++) {
+		# check alerts for each sensor defined
+		nvidia_alerts($config, "mem$n", $mem[$n]);
 		$rrdata .= ":$mem[$n]";
 	}
 
@@ -195,16 +273,30 @@ sub nvidia_update {
 
 sub nvidia_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $nvidia = $config->{nvidia};
+	my @rigid = split(',', ($nvidia->{rigid} || ""));
+	my @limit = split(',', ($nvidia->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
+	my @riglim;
 	my $temp_scale = "Celsius";
 	my @tmp;
 	my @tmpz;
@@ -223,9 +315,12 @@ sub nvidia_cgi {
 		"#963C74",
 	);
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -238,31 +333,31 @@ sub nvidia_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line1;
 		my $line2;
 		my $line3;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		for($n = 0; $n < $nvidia->{max}; $n++) {
-			print("    NVIDIA card $n");
+			push(@output, "    NVIDIA card $n");
 		}
-		print("\n");
+		push(@output, "\n");
 		for($n = 0; $n < $nvidia->{max}; $n++) {
 			$line2 .= "   Temp  GPU  Mem";
 			$line3 .= "-----------------";
 		}
-		print("Time$line2\n");
-		print("----$line3 \n");
+		push(@output, "Time$line2\n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -270,7 +365,7 @@ sub nvidia_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			undef($line1);
 			undef(@row);
 			for($n2 = 0; $n2 < $nvidia->{max}; $n2++) {
@@ -279,17 +374,17 @@ sub nvidia_cgi {
 				push(@row, celsius_to($config, @$line[$n2 + 18]));
 				$line1 .= "   %3d %3d%% %3d%%";
 			}
-			print(sprintf($line1, @row));
-			print("\n");
+			push(@output, sprintf($line1, @row));
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -304,26 +399,27 @@ sub nvidia_cgi {
 		$u = "";
 	}
 
-	my $PNG1 = $u . $package . "1." . $tf->{when} . ".png";
-	my $PNG2 = $u . $package . "2." . $tf->{when} . ".png";
-	my $PNG3 = $u . $package . "3." . $tf->{when} . ".png";
-	my $PNG1z = $u . $package . "1z." . $tf->{when} . ".png";
-	my $PNG2z = $u . $package . "2z." . $tf->{when} . ".png";
-	my $PNG3z = $u . $package . "3z." . $tf->{when} . ".png";
+	my $IMG1 = $u . $package . "1." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2 = $u . $package . "2." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3 = $u . $package . "3." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG1z = $u . $package . "1z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2z = $u . $package . "2z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3z = $u . $package . "3z." . $tf->{when} . ".$imgfmt_lc";
 
-	unlink ("$PNG_DIR" . "$PNG1",
-		"$PNG_DIR" . "$PNG2",
-		"$PNG_DIR" . "$PNG3");
+	unlink ("$IMG_DIR" . "$IMG1",
+		"$IMG_DIR" . "$IMG2",
+		"$IMG_DIR" . "$IMG3");
 	if(lc($config->{enable_zoom}) eq "y") {
-		unlink ("$PNG_DIR" . "$PNG1z",
-			"$PNG_DIR" . "$PNG2z",
-			"$PNG_DIR" . "$PNG3z");
+		unlink ("$IMG_DIR" . "$IMG1z",
+			"$IMG_DIR" . "$IMG2z",
+			"$IMG_DIR" . "$IMG3z");
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
 
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	for($n = 0; $n < 9; $n++) {
 		if($n < $nvidia->{max}) {
 			push(@tmp, "LINE2:temp_" . $n . $LC[$n] . ":Card $n");
@@ -338,8 +434,8 @@ sub nvidia_cgi {
 	}
 
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	if(lc($config->{temperature_scale}) eq "f") {
 		push(@CDEF, "CDEF:temp_0=9,5,/,temp0,*,32,+");
@@ -362,6 +458,11 @@ sub nvidia_cgi {
 		push(@CDEF, "CDEF:temp_7=temp7");
 		push(@CDEF, "CDEF:temp_8=temp8");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -369,14 +470,15 @@ sub nvidia_cgi {
 		@tmp = @tmpz;
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG1",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG1",
 		"--title=$config->{graphs}->{_nvidia1}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$temp_scale",
 		"--width=$width",
 		"--height=$height",
-		"--lower-limit=0",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$colors->{graph_colors}},
 		"DEF:temp0=$rrd:nvidia_temp0:AVERAGE",
@@ -388,22 +490,24 @@ sub nvidia_cgi {
 		"DEF:temp6=$rrd:nvidia_temp6:AVERAGE",
 		"DEF:temp7=$rrd:nvidia_temp7:AVERAGE",
 		"DEF:temp8=$rrd:nvidia_temp8:AVERAGE",
+		"CDEF:allvalues=temp0,temp1,temp2,temp3,temp4,temp5,temp6,temp7,temp8,+,+,+,+,+,+,+,+",
 		@CDEF,
 		@tmp,
 		"COMMENT: \\n",
 		"COMMENT: \\n");
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG1z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 			"--title=$config->{graphs}->{_nvidia1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$temp_scale",
 			"--width=$width",
 			"--height=$height",
-			"--lower-limit=0",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:temp0=$rrd:nvidia_temp0:AVERAGE",
@@ -415,30 +519,39 @@ sub nvidia_cgi {
 			"DEF:temp6=$rrd:nvidia_temp6:AVERAGE",
 			"DEF:temp7=$rrd:nvidia_temp7:AVERAGE",
 			"DEF:temp8=$rrd:nvidia_temp8:AVERAGE",
+			"CDEF:allvalues=temp0,temp1,temp2,temp3,temp4,temp5,temp6,temp7,temp8,+,+,+,+,+,+,+,+",
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /nvidia1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
+	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	push(@tmp, "LINE2:gpu0#FFA500:Card 0\\g");
 	push(@tmp, "GPRINT:gpu0:LAST:\\:%3.0lf%%");
 	push(@tmp, "LINE2:gpu3#4444EE:Card 3\\g");
@@ -457,15 +570,16 @@ sub nvidia_cgi {
 	push(@tmp, "GPRINT:gpu5:LAST:\\:%3.0lf%%");
 	push(@tmp, "LINE2:gpu8#963C74:Card 8\\g");
 	push(@tmp, "GPRINT:gpu8:LAST:\\:%3.0lf%%\\n");
-	push(@tmpz, "LINE2:gpu0#FFA500:Card 0");
-	push(@tmpz, "LINE2:gpu3#4444EE:Card 3");
-	push(@tmpz, "LINE2:gpu6#EE44EE:Card 6");
-	push(@tmpz, "LINE2:gpu1#44EEEE:Card 1");
-	push(@tmpz, "LINE2:gpu4#448844:Card 4");
-	push(@tmpz, "LINE2:gpu7#EEEE44:Card 7");
-	push(@tmpz, "LINE2:gpu2#44EE44:Card 2");
-	push(@tmpz, "LINE2:gpu5#EE4444:Card 5");
-	push(@tmpz, "LINE2:gpu8#963C74:Card 8");
+        for($n = 0; $n < 9; $n++) {
+                if($n < $nvidia->{max}) {
+                        push(@tmpz, "LINE2:gpu" . $n . $LC[$n] . ":Card $n");
+                }
+        }
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -473,16 +587,15 @@ sub nvidia_cgi {
 		@tmp = @tmpz;
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG2",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG2",
 		"--title=$config->{graphs}->{_nvidia2}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=Percent",
 		"--width=$width",
 		"--height=$height",
-		"--upper-limit=100",
-		"--lower-limit=0",
-		"--rigid",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -495,22 +608,23 @@ sub nvidia_cgi {
 		"DEF:gpu6=$rrd:nvidia_gpu6:AVERAGE",
 		"DEF:gpu7=$rrd:nvidia_gpu7:AVERAGE",
 		"DEF:gpu8=$rrd:nvidia_gpu8:AVERAGE",
+		"CDEF:allvalues=gpu0,gpu1,gpu2,gpu3,gpu4,gpu5,gpu6,gpu7,gpu8,+,+,+,+,+,+,+,+",
+		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG2z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
 			"--title=$config->{graphs}->{_nvidia2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Percent",
 			"--width=$width",
 			"--height=$height",
-			"--upper-limit=100",
-			"--lower-limit=0",
-			"--rigid",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -523,25 +637,35 @@ sub nvidia_cgi {
 			"DEF:gpu6=$rrd:nvidia_gpu6:AVERAGE",
 			"DEF:gpu7=$rrd:nvidia_gpu7:AVERAGE",
 			"DEF:gpu8=$rrd:nvidia_gpu8:AVERAGE",
+			"CDEF:allvalues=gpu0,gpu1,gpu2,gpu3,gpu4,gpu5,gpu6,gpu7,gpu8,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /nvidia2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
+	@riglim = @{setup_riglim($rigid[2], $limit[2])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	push(@tmp, "LINE2:mem0#FFA500:Card 0\\g");
 	push(@tmp, "GPRINT:mem0:LAST:\\:%3.0lf%%");
 	push(@tmp, "LINE2:mem3#4444EE:Card 3\\g");
@@ -560,15 +684,16 @@ sub nvidia_cgi {
 	push(@tmp, "GPRINT:mem5:LAST:\\:%3.0lf%%");
 	push(@tmp, "LINE2:mem8#963C74:Card 8\\g");
 	push(@tmp, "GPRINT:mem8:LAST:\\:%3.0lf%%\\n");
-	push(@tmpz, "LINE2:mem0#FFA500:Card 0");
-	push(@tmpz, "LINE2:mem3#4444EE:Card 3");
-	push(@tmpz, "LINE2:mem6#EE44EE:Card 6");
-	push(@tmpz, "LINE2:mem1#44EEEE:Card 1");
-	push(@tmpz, "LINE2:mem4#448844:Card 4");
-	push(@tmpz, "LINE2:mem7#EEEE44:Card 7");
-	push(@tmpz, "LINE2:mem2#44EE44:Card 2");
-	push(@tmpz, "LINE2:mem5#EE4444:Card 5");
-	push(@tmpz, "LINE2:mem8#963C74:Card 8");
+        for($n = 0; $n < 9; $n++) {
+                if($n < $nvidia->{max}) {
+                        push(@tmpz, "LINE2:mem" . $n . $LC[$n] . ":Card $n");
+                }
+        }
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -576,17 +701,16 @@ sub nvidia_cgi {
 		@tmp = @tmpz;
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG3",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG3",
 		"--title=$config->{graphs}->{_nvidia3}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=Percent",
 		"--width=$width",
 		"--height=$height",
-		"--upper-limit=100",
-		"--lower-limit=0",
-		"--rigid",
+		@riglim,
 		@{$cgi->{version12}},
+		$zoom,
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
 		"DEF:mem0=$rrd:nvidia_mem0:AVERAGE",
@@ -598,22 +722,23 @@ sub nvidia_cgi {
 		"DEF:mem6=$rrd:nvidia_mem6:AVERAGE",
 		"DEF:mem7=$rrd:nvidia_mem7:AVERAGE",
 		"DEF:mem8=$rrd:nvidia_mem8:AVERAGE",
+		"CDEF:allvalues=mem0,mem1,mem2,mem3,mem4,mem5,mem6,mem7,mem8,+,+,+,+,+,+,+,+",
+		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG3z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
 			"--title=$config->{graphs}->{_nvidia3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Percent",
 			"--width=$width",
 			"--height=$height",
-			"--upper-limit=100",
-			"--lower-limit=0",
-			"--rigid",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -626,30 +751,38 @@ sub nvidia_cgi {
 			"DEF:mem6=$rrd:nvidia_mem6:AVERAGE",
 			"DEF:mem7=$rrd:nvidia_mem7:AVERAGE",
 			"DEF:mem8=$rrd:nvidia_mem8:AVERAGE",
+			"CDEF:allvalues=mem0,mem1,mem2,mem3,mem4,mem5,mem6,mem7,mem8,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /nvidia3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,88 +31,79 @@ sub net_init {
 	my $myself = (caller(0))[3];
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
+	my $net = $config->{net};
+
+	my $info;
+	my @ds;
+	my @rra;
+	my @tmp;
+	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	if(-e $rrd) {
+		$info = RRDs::info($rrd);
+		for my $key (keys %$info) {
+			if(index($key, 'ds[') == 0) {
+				if(index($key, '.type') != -1) {
+					push(@ds, substr($key, 3, index($key, ']') - 3));
+				}
+			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
+		}
+		if(scalar(@ds) / 6 != $net->{max}) {
+			logger("$myself: Detected size mismatch between 'max = $net->{max}' and $rrd (" . scalar(@ds) / 6 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
+		for($n = 0; $n < $net->{max}; $n++) {
+			push(@tmp, "DS:net" . $n . "_bytes_in:GAUGE:120:0:U"),
+			push(@tmp, "DS:net" . $n . "_bytes_out:GAUGE:120:0:U"),
+			push(@tmp, "DS:net" . $n . "_packs_in:GAUGE:120:0:U"),
+			push(@tmp, "DS:net" . $n . "_packs_out:GAUGE:120:0:U"),
+			push(@tmp, "DS:net" . $n . "_error_in:GAUGE:120:0:U"),
+			push(@tmp, "DS:net" . $n . "_error_out:GAUGE:120:0:U"),
+		}
 		eval {
 			RRDs::create($rrd,
 				"--step=60",
-				"DS:net0_bytes_in:COUNTER:120:0:U",
-				"DS:net0_bytes_out:COUNTER:120:0:U",
-				"DS:net0_packs_in:COUNTER:120:0:U",
-				"DS:net0_packs_out:COUNTER:120:0:U",
-				"DS:net0_error_in:COUNTER:120:0:U",
-				"DS:net0_error_out:COUNTER:120:0:U",
-				"DS:net1_bytes_in:COUNTER:120:0:U",
-				"DS:net1_bytes_out:COUNTER:120:0:U",
-				"DS:net1_packs_in:COUNTER:120:0:U",
-				"DS:net1_packs_out:COUNTER:120:0:U",
-				"DS:net1_error_in:COUNTER:120:0:U",
-				"DS:net1_error_out:COUNTER:120:0:U",
-				"DS:net2_bytes_in:COUNTER:120:0:U",
-				"DS:net2_bytes_out:COUNTER:120:0:U",
-				"DS:net2_packs_in:COUNTER:120:0:U",
-				"DS:net2_packs_out:COUNTER:120:0:U",
-				"DS:net2_error_in:COUNTER:120:0:U",
-				"DS:net2_error_out:COUNTER:120:0:U",
-				"DS:net3_bytes_in:COUNTER:120:0:U",
-				"DS:net3_bytes_out:COUNTER:120:0:U",
-				"DS:net3_packs_in:COUNTER:120:0:U",
-				"DS:net3_packs_out:COUNTER:120:0:U",
-				"DS:net3_error_in:COUNTER:120:0:U",
-				"DS:net3_error_out:COUNTER:120:0:U",
-				"DS:net4_bytes_in:COUNTER:120:0:U",
-				"DS:net4_bytes_out:COUNTER:120:0:U",
-				"DS:net4_packs_in:COUNTER:120:0:U",
-				"DS:net4_packs_out:COUNTER:120:0:U",
-				"DS:net4_error_in:COUNTER:120:0:U",
-				"DS:net4_error_out:COUNTER:120:0:U",
-				"DS:net5_bytes_in:COUNTER:120:0:U",
-				"DS:net5_bytes_out:COUNTER:120:0:U",
-				"DS:net5_packs_in:COUNTER:120:0:U",
-				"DS:net5_packs_out:COUNTER:120:0:U",
-				"DS:net5_error_in:COUNTER:120:0:U",
-				"DS:net5_error_out:COUNTER:120:0:U",
-				"DS:net6_bytes_in:COUNTER:120:0:U",
-				"DS:net6_bytes_out:COUNTER:120:0:U",
-				"DS:net6_packs_in:COUNTER:120:0:U",
-				"DS:net6_packs_out:COUNTER:120:0:U",
-				"DS:net6_error_in:COUNTER:120:0:U",
-				"DS:net6_error_out:COUNTER:120:0:U",
-				"DS:net7_bytes_in:COUNTER:120:0:U",
-				"DS:net7_bytes_out:COUNTER:120:0:U",
-				"DS:net7_packs_in:COUNTER:120:0:U",
-				"DS:net7_packs_out:COUNTER:120:0:U",
-				"DS:net7_error_in:COUNTER:120:0:U",
-				"DS:net7_error_out:COUNTER:120:0:U",
-				"DS:net8_bytes_in:COUNTER:120:0:U",
-				"DS:net8_bytes_out:COUNTER:120:0:U",
-				"DS:net8_packs_in:COUNTER:120:0:U",
-				"DS:net8_packs_out:COUNTER:120:0:U",
-				"DS:net8_error_in:COUNTER:120:0:U",
-				"DS:net8_error_out:COUNTER:120:0:U",
-				"DS:net9_bytes_in:COUNTER:120:0:U",
-				"DS:net9_bytes_out:COUNTER:120:0:U",
-				"DS:net9_packs_in:COUNTER:120:0:U",
-				"DS:net9_packs_out:COUNTER:120:0:U",
-				"DS:net9_error_in:COUNTER:120:0:U",
-				"DS:net9_error_out:COUNTER:120:0:U",
+				@tmp,
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -128,6 +119,23 @@ sub net_init {
 		}
 	}
 
+	if(scalar(my @pls = split(',', $net->{list})) > $net->{max}) {
+		logger("$myself: WARNING: 'max' option indicates less interfaces than really defined in 'list'.");
+	}
+
+	# Since 3.6.0 all DS changed from COUNTER to GAUGE
+	for($n = 0; $n < $net->{max}; $n++) {
+		RRDs::tune($rrd,
+			"--data-source-type=net" . $n . "_bytes_in:GAUGE",
+			"--data-source-type=net" . $n . "_bytes_out:GAUGE",
+			"--data-source-type=net" . $n . "_packs_in:GAUGE",
+			"--data-source-type=net" . $n . "_packs_out:GAUGE",
+			"--data-source-type=net" . $n . "_error_in:GAUGE",
+			"--data-source-type=net" . $n . "_error_out:GAUGE",
+		);
+	}
+
+	$config->{net_hist} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
 }
@@ -138,31 +146,26 @@ sub net_update {
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $net = $config->{net};
 
-	my @net_bytes_in = (0) x 10;
-	my @net_bytes_out = (0) x 10;
-	my @net_packs_in = (0) x 10;
-	my @net_packs_out = (0) x 10;
-	my @net_error_in = (0) x 10;
-	my @net_error_out = (0) x 10;
-
 	my $n;
 	my $rrdata = "N";
 
-	for($n = 0; $n < 10 ; $n++) {
-		$net_bytes_in[$n] = 0;
-		$net_bytes_out[$n] = 0;
-		$net_packs_in[$n] = 0;
-		$net_packs_out[$n] = 0;
-		$net_error_in[$n] = 0;
-		$net_error_out[$n] = 0;
+	for($n = 0; $n < $net->{max} ; $n++) {
+		my ($bytes_in, $bi) = (0, 0);
+		my ($bytes_out, $bo) = (0, 0);
+		my ($packs_in, $pi) = (0, 0);
+		my ($packs_out, $po) = (0, 0);
+		my ($error_in, $ei) = (0, 0);
+		my ($error_out, $eo) = (0, 0);
+		my $str;
+
 		if($n < scalar(my @nl = split(',', $net->{list}))) {
 			$nl[$n] = trim($nl[$n]);
 			if($config->{os} eq "Linux") {
 				open(IN, "/proc/net/dev");
 				while(<IN>) {
 					my ($dev, $data) = split(':', $_);
-					if($dev =~ /$nl[$n]/) {
-						($net_bytes_in[$n], $net_packs_in[$n], $net_error_in[$n], undef, undef, undef, undef, undef, $net_bytes_out[$n], $net_packs_out[$n], $net_error_out[$n]) = split(' ', $data);
+					if(trim($dev) eq $nl[$n]) {
+						($bi, $pi, $ei, undef, undef, undef, undef, undef, $bo, $po, $eo) = split(' ', $data);
 						last;
 					}
 				}
@@ -172,10 +175,10 @@ sub net_update {
 				while(<IN>) {
 					if(/Link/ && /$nl[$n]/) {
 						# Idrop column added in 8.0
-						if($config->{kernel} > 7.2) {
-							(undef, undef, undef, undef, $net_packs_in[$n], $net_error_in[$n], undef, $net_bytes_in[$n], $net_packs_out[$n], $net_error_out[$n], $net_bytes_out[$n]) = split(' ', $_);
+						if($config->{kernel} > "7.2") {
+							(undef, undef, undef, undef, $pi, $ei, undef, $bi, $po, $eo, $bo) = split(' ', $_);
 						} else {
-							(undef, undef, undef, undef, $net_packs_in[$n], $net_error_in[$n], $net_bytes_in[$n], $net_packs_out[$n], $net_error_out[$n], $net_bytes_out[$n]) = split(' ', $_);
+							(undef, undef, undef, undef, $pi, $ei, $bi, $po, $eo, $bo) = split(' ', $_);
 						}
 						last;
 					}
@@ -185,24 +188,57 @@ sub net_update {
 				open(IN, "netstat -nibd |");
 				while(<IN>) {
 					if(/Link/ && /^$nl[$n]/) {
-						(undef, undef, undef, undef, $net_bytes_in[$n], $net_bytes_out[$n]) = split(' ', $_);
-						$net_packs_in[$n] = 0;
-						$net_error_in[$n] = 0;
-						$net_packs_out[$n] = 0;
-						$net_error_out[$n] = 0;
+						(undef, undef, undef, undef, $bi, $bo) = split(' ', $_);
+						$pi = 0;
+						$ei = 0;
+						$po = 0;
+						$eo = 0;
 						last;
 					}
 				}
 				close(IN);
 			}
 		}
-		chomp($net_bytes_in[$n],
-			$net_bytes_out[$n],
-			$net_packs_in[$n],
-			$net_packs_out[$n],
-			$net_error_in[$n],
-			$net_error_out[$n]);
-		$rrdata .= ":$net_bytes_in[$n]:$net_bytes_out[$n]:$net_packs_in[$n]:$net_packs_out[$n]:$net_error_in[$n]:$net_error_out[$n]";
+		chomp($bi, $bo, $pi, $po, $ei, $eo);
+
+		$str = $n . "_bytes_in";
+		$bytes_in = $bi - ($config->{net_hist}->{$str} || 0);
+		$bytes_in = 0 unless $bytes_in != $bi;
+		$config->{net_hist}->{$str} = $bi;
+		$bytes_in /= 60;
+
+		$str = $n . "_bytes_out";
+		$bytes_out = $bo - ($config->{net_hist}->{$str} || 0);
+		$bytes_out = 0 unless $bytes_out != $bo;
+		$config->{net_hist}->{$str} = $bo;
+		$bytes_out /= 60;
+
+		$str = $n . "_packs_in";
+		$packs_in = $pi - ($config->{net_hist}->{$str} || 0);
+		$packs_in = 0 unless $packs_in != $pi;
+		$config->{net_hist}->{$str} = $pi;
+		$packs_in /= 60;
+
+		$str = $n . "_packs_out";
+		$packs_out = $po - ($config->{net_hist}->{$str} || 0);
+		$packs_out = 0 unless $packs_out != $po;
+		$config->{net_hist}->{$str} = $po;
+		$packs_out /= 60;
+
+		$str = $n . "_error_in";
+		$error_in = $ei - ($config->{net_hist}->{$str} || 0);
+		$error_in = 0 unless $error_in != $ei;
+		$config->{net_hist}->{$str} = $ei;
+		$error_in /= 60;
+
+		$str = $n . "_error_out";
+		$error_out = $eo - ($config->{net_hist}->{$str} || 0);
+		$error_out = 0 unless $error_out != $eo;
+		$config->{net_hist}->{$str} = $eo;
+		$error_out /= 60;
+
+
+		$rrdata .= ":$bytes_in:$bytes_out:$packs_in:$packs_out:$error_in:$error_out";
 	}
 
 	RRDs::update($rrd, $rrdata);
@@ -213,12 +249,23 @@ sub net_update {
 
 sub net_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $net = $config->{net};
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
@@ -234,9 +281,12 @@ sub net_cgi {
 	my $str;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -250,32 +300,32 @@ sub net_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("       ");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "       ");
 		for($n = 0; $n < scalar(my @nl = split(',', $net->{list})); $n++) {
 			$nl[$n] = trim($nl[$n]);
 			my $nd = trim((split(',', $net->{desc}->{$nl[$n]}))[0]);
-			print(trim($nl[$n]) . " ($nd)                          ");
+			push(@output, (trim($nl[$n]) . " ($nd)                          "));
 		}
-		print("\nTime");
+		push(@output, "\nTime");
 		for($n = 0; $n < scalar(my @nl = split(',', $net->{list})); $n++) {
-			print("   K$T/s_I  K$T/s_O  Pk/s_I  Pk/s_O  Er/s_I  Er/s_O");
+			push(@output, "   K$T/s_I  K$T/s_O  Pk/s_I  Pk/s_O  Er/s_I  Er/s_O");
 		}
-		print(" \n----");
+		push(@output, " \n----");
 		for($n = 0; $n < scalar(my @nl = split(',', $net->{list})); $n++) {
-			print("-------------------------------------------------");
+			push(@output, "-------------------------------------------------");
 		}
-		print " \n";
+		push(@output, " \n");
 		my $line;
 		my @row;
 		my $time;
@@ -285,7 +335,7 @@ sub net_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc}", $time);
+			push(@output, sprintf(" %2d$tf->{tc}", $time));
 			for($n2 = 0; $n2 < scalar(my @nl = split(',', $net->{list})); $n2++) {
 				$from = $n2 * 6;
 				$to = $from + 6;
@@ -301,18 +351,18 @@ sub net_cgi {
 					$ko *= 8;
 				}
 				@row = ($ki, $ko, $pi, $po, $ei, $eo);
-				printf("   %6d  %6d  %6d  %6d  %6d  %6d", @row);
+				push(@output, sprintf("   %6d  %6d  %6d  %6d  %6d  %6d", @row));
 			}
-			print(" \n");
+			push(@output, " \n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -327,26 +377,26 @@ sub net_cgi {
 		$u = "";
 	}
 
-	my $PNG1;
-	my $PNG2;
-	my $PNG3;
-	my $PNG1z;
-	my $PNG2z;
-	my $PNG3z;
+	my $IMG1;
+	my $IMG2;
+	my $IMG3;
+	my $IMG1z;
+	my $IMG2z;
+	my $IMG3z;
 	for($n = 0; $n < scalar(my @nl = split(',', $net->{list})); $n++) {
-		$PNG1 = $u . $package . $n . "1." . $tf->{when} . ".png";
-		$PNG2 = $u . $package . $n . "2." . $tf->{when} . ".png";
-		$PNG3 = $u . $package . $n . "3." . $tf->{when} . ".png";
-		unlink("$PNG_DIR" . $PNG1);
-		unlink("$PNG_DIR" . $PNG2);
-		unlink("$PNG_DIR" . $PNG3);
+		$IMG1 = $u . $package . $n . "1." . $tf->{when} . ".$imgfmt_lc";
+		$IMG2 = $u . $package . $n . "2." . $tf->{when} . ".$imgfmt_lc";
+		$IMG3 = $u . $package . $n . "3." . $tf->{when} . ".$imgfmt_lc";
+		unlink("$IMG_DIR" . $IMG1);
+		unlink("$IMG_DIR" . $IMG2);
+		unlink("$IMG_DIR" . $IMG3);
 		if(lc($config->{enable_zoom}) eq "y") {
-			$PNG1z = $u . $package . $n . "1z." . $tf->{when} . ".png";
-			$PNG2z = $u . $package . $n . "2z." . $tf->{when} . ".png";
-			$PNG3z = $u . $package . $n . "3z." . $tf->{when} . ".png";
-			unlink("$PNG_DIR" . $PNG1z);
-			unlink("$PNG_DIR" . $PNG2z);
-			unlink("$PNG_DIR" . $PNG3z);
+			$IMG1z = $u . $package . $n . "1z." . $tf->{when} . ".$imgfmt_lc";
+			$IMG2z = $u . $package . $n . "2z." . $tf->{when} . ".$imgfmt_lc";
+			$IMG3z = $u . $package . $n . "3z." . $tf->{when} . ".$imgfmt_lc";
+			unlink("$IMG_DIR" . $IMG1z);
+			unlink("$IMG_DIR" . $IMG2z);
+			unlink("$IMG_DIR" . $IMG3z);
 		}
 
 		$nl[$n] = trim($nl[$n]);
@@ -356,22 +406,14 @@ sub net_cgi {
 
 		if($title) {
 			if($n) {
-				print("    <br>\n");
+				push(@output, "    <br>\n");
 			}
-			main::graph_header($nl[$n] . " " . $title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($nl[$n] . " " . $title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 
-		undef(@riglim);
-		if(trim($rigid) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit));
-		} else {
-			if(trim($rigid) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid, $limit)};
 		undef(@tmp);
 		undef(@tmpz);
 		undef(@CDEF);
@@ -402,6 +444,11 @@ sub net_cgi {
 			push(@CDEF, "CDEF:B_in=in");
 			push(@CDEF, "CDEF:B_out=out");
 		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{main});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -409,19 +456,20 @@ sub net_cgi {
 			@tmp = @tmpz;
 			push(@tmp, "COMMENT: \\n");
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG1",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG1",
 			"--title=$nl[$n] $nd  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:in=$rrd:net" . $n . "_bytes_in:AVERAGE",
 			"DEF:out=$rrd:net" . $n . "_bytes_out:AVERAGE",
+			"CDEF:allvalues=in,out,+",
 			@CDEF,
 			"CDEF:K_in=B_in,1024,/",
 			"CDEF:K_out=B_out,1024,/",
@@ -431,56 +479,56 @@ sub net_cgi {
 			"COMMENT: \\n",
 			);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG1: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNG1z",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 				"--title=$nl[$n] $nd  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$colors->{graph_colors}},
 				"DEF:in=$rrd:net" . $n . "_bytes_in:AVERAGE",
 				"DEF:out=$rrd:net" . $n . "_bytes_out:AVERAGE",
+				"CDEF:allvalues=in,out,+",
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNG1z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 		}
 		$netname="net" . $n . "1";
 		if($title || ($silent =~ /imagetag/ && $graph =~ /$netname/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 		}
-		undef(@riglim);
-		if(trim($rigid) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit));
-		} else {
-			if(trim($rigid) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid, $limit)};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "AREA:p_in#44EE44:Input");
 		push(@tmp, "AREA:p_out#4444EE:Output");
 		push(@tmp, "AREA:p_out#4444EE:");
@@ -493,6 +541,11 @@ sub net_cgi {
 		push(@tmpz, "AREA:p_in#44EE44:");
 		push(@tmpz, "LINE1:p_out#0000EE");
 		push(@tmpz, "LINE1:p_in#00EE00");
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{small});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -502,68 +555,71 @@ sub net_cgi {
 			push(@tmp, "COMMENT: \\n");
 			push(@tmp, "COMMENT: \\n");
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG2",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG2",
 			"--title=$nl[$n] $config->{graphs}->{_net2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Packets/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:p_in=$rrd:net" . $n . "_packs_in:AVERAGE",
 			"DEF:p_out=$rrd:net" . $n . "_packs_out:AVERAGE",
+			"CDEF:allvalues=p_in,p_out,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG2: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNG2z",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
 				"--title=$nl[$n] $config->{graphs}->{_net2}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Packets/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:p_in=$rrd:net" . $n . "_packs_in:AVERAGE",
 				"DEF:p_out=$rrd:net" . $n . "_packs_out:AVERAGE",
+				"CDEF:allvalues=p_in,p_out,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNG2z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 		}
 		$netname="net" . $n . "2";
 		if($title || ($silent =~ /imagetag/ && $graph =~ /$netname/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 			}
 		}
 
-		undef(@riglim);
-		if(trim($rigid) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit));
-		} else {
-			if(trim($rigid) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid, $limit)};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "AREA:e_in#44EE44:Input");
 		push(@tmp, "AREA:e_out#4444EE:Output");
 		push(@tmp, "AREA:e_out#4444EE:");
@@ -576,6 +632,11 @@ sub net_cgi {
 		push(@tmpz, "AREA:e_in#44EE44:");
 		push(@tmpz, "LINE1:e_out#0000EE");
 		push(@tmpz, "LINE1:e_in#00EE00");
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{small});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -585,64 +646,74 @@ sub net_cgi {
 			push(@tmp, "COMMENT: \\n");
 			push(@tmp, "COMMENT: \\n");
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG3",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG3",
 			"--title=$nl[$n] $config->{graphs}->{_net3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Errors/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:e_in=$rrd:net" . $n . "_error_in:AVERAGE",
 			"DEF:e_out=$rrd:net" . $n . "_error_out:AVERAGE",
+			"CDEF:allvalues=e_in,e_out,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG3: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNG3z",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
 				"--title=$nl[$n] $config->{graphs}->{_net3}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Errors/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:e_in=$rrd:net" . $n . "_error_in:AVERAGE",
 				"DEF:e_out=$rrd:net" . $n . "_error_out:AVERAGE",
+				"CDEF:allvalues=e_in,e_out,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNG3z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 		}
 		$netname="net" . $n . "3";
 		if($title || ($silent =~ /imagetag/ && $graph =~ /$netname/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 1;

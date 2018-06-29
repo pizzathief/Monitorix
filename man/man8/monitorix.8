@@ -1,25 +1,26 @@
 .\" Monitorix manpage.
-.\" Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+.\" Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 .\"
 .\" This is the man page for the monitorix collector daemon.
 .\"
-.TH monitorix 8 "May 2013" 3.2.0 "Monitorix collector daemon"
+.TH monitorix 8 "Sep 2017" 3.10.0 "Monitorix collector daemon"
 .SH NAME
 monitorix - a lightweight system monitoring tool
 .SH SYNOPSIS
-\fBmonitorix\fR \fB-c\fR configfile [\fB-p\fR pidfile] [\fB-d\fR none | graph[,graph] | all] [\fB-v\fR]
+\fBmonitorix\fR \fB-c\fR configfile [\fB-p\fR pidfile] [\fB-d\fR none | graph[,graph] | all] [\fB-v\fR] [\fB-n\fR]
 .SH DESCRIPTION
 This Perl daemon starts the main Monitorix process, which gathers statistics about the system it is running on and stores this information in a set of RRD files.
 .SH OPTIONS
 .TP
 \fB\-c\fR \fIconfigfile\fR
-The default location of the configuration file varies depending on the operating system:
+The default location of the main configuration file varies depending on the operating system:
 .P
 .RS
-Linux:        \fI/etc/monitorix.conf\fP
+Linux:        \fI/etc/monitorix/monitorix.conf\fP
 .br
 FreeBSD:      \fI/usr/local/etc/monitorix.conf\fP
 .P
+Extra configuration files can be placed in \fI/etc/monitorix/conf.d\fP, they will be loaded right after the main configuration file (overriding previous options).
 .RE
 .TP
 \fB\-p\fR \fIpidfile\fR
@@ -32,6 +33,9 @@ For a reference of all graph names check the option \fBgraph_name\fP in the \fIm
 .TP
 \fB\-v\fR
 Displays version information.
+.TP
+\fB\-n\fR
+This argument will prevent Monitorix from daemonizing, and hence, forcing it to run in foreground. This is specially usefull for debugging purposes.
 .SH SIGNALS
 On receipt of a SIGHUP, \fBmonitorix\fP will close and reopen its log file. This is useful in scripts which rotate and age log files.
 .P
@@ -50,7 +54,7 @@ HTML main page.
 .SH AUTHOR
 Monitorix is written by Jordi Sanfeliu <jordi@fibranet.cat>
 .SH COPYRIGHT
-Copyright \(co 2005-2013 Jordi Sanfeliu
+Copyright \(co 2005-2017 Jordi Sanfeliu
 .br
 Licensed under the GNU General Public License version 2 (GPLv2).
 .SH "SEE ALSO"

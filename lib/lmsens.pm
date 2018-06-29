@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -32,8 +32,44 @@ sub lmsens_init {
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 
+	my $info;
+	my @rra;
+	my @tmp;
+	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	if(grep {$_ eq $config->{os}} ("FreeBSD", "OpenBSD", "NetBSD")) {
+		logger("$myself is not supported yet by your operating system ($config->{os}).");
+		return;
+	}
+
+	if(-e $rrd) {
+		$info = RRDs::info($rrd);
+		for my $key (keys %$info) {
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+	}
+
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		eval {
 			RRDs::create($rrd,
 				"--step=60",
@@ -92,19 +128,19 @@ sub lmsens_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -120,8 +156,42 @@ sub lmsens_init {
 		}
 	}
 
+	$config->{lmsens_hist_alerts} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
+}
+
+sub lmsens_alerts {
+	my $myself = (caller(0))[3];
+	my $config = (shift);
+	my $sensor = (shift);
+	my $val = (shift);
+
+	my $lmsens = $config->{lmsens};
+	my @al = split(',', $lmsens->{alerts}->{$sensor} || "");
+
+	if(scalar(@al)) {
+		my $timeintvl = trim($al[0]);
+		my $threshold = trim($al[1]);
+		my $script = trim($al[2]);
+	
+		if(!$threshold || $val < $threshold) {
+			$config->{lmsens_hist_alerts}->{$sensor} = 0;
+		} else {
+			if(!$config->{lmsens_hist_alerts}->{$sensor}) {
+				$config->{lmsens_hist_alerts}->{$sensor} = time;
+			}
+			if($config->{lmsens_hist_alerts}->{$sensor} > 0 && (time - $config->{lmsens_hist_alerts}->{$sensor}) >= $timeintvl) {
+				if(-x $script) {
+					logger("$myself: alert on LM-Sensor ($sensor): executing script '$script'.");
+					system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+				} else {
+					logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+				}
+				$config->{lmsens_hist_alerts}->{$sensor} = time;
+			}
+		}
+	}
 }
 
 sub lmsens_update {
@@ -167,6 +237,8 @@ sub lmsens_update {
 							$value = $1;
 						}
 						$mb[$n] = int($value);
+						# check alerts for each sensor defined
+						lmsens_alerts($config, $str, $value);
 					}
 				}
 				for($n = 0; $n < 4; $n++) {
@@ -184,6 +256,8 @@ sub lmsens_update {
 							$value = $1;
 						}
 						$cpu[$n] = int($value);
+						# check alerts for each sensor defined
+						lmsens_alerts($config, $str, $value);
 					}
 				}
 				for($n = 0; $n < 9; $n++) {
@@ -198,6 +272,8 @@ sub lmsens_update {
 						}
 						my ($value, undef) = split(' ', $tmp);
 						$fan[$n] = int($value);
+						# check alerts for each sensor defined
+						lmsens_alerts($config, $str, $value);
 					}
 				}
 				for($n = 0; $n < 16; $n++) {
@@ -215,6 +291,8 @@ sub lmsens_update {
 							$value = $1;
 						}
 						$core[$n] = int($value);
+						# check alerts for each sensor defined
+						lmsens_alerts($config, $str, $value);
 					}
 				}
 				for($n = 0; $n < 12; $n++) {
@@ -229,6 +307,8 @@ sub lmsens_update {
 						}
 						my ($value, undef) = split(' ', $tmp);
 						$volt[$n] = $value;
+						# check alerts for each sensor defined
+						lmsens_alerts($config, $str, $value);
 					}
 				}
 			}
@@ -260,12 +340,16 @@ sub lmsens_update {
 								if(int($value) > 0) {
 									$gpu[$n] = int($value);
 								}
+								# check alerts for each sensor defined
+								lmsens_alerts($config, $str, $value);
 							}
 						}
 					}
 				}
 				if($lmsens->{list}->{$str} eq "ati") {
 					$gpu[$n] = get_ati_data($n);
+					# check alerts for each sensor defined
+					lmsens_alerts($config, $str, $gpu[$n]);
 				}
 			}
 		}
@@ -297,16 +381,30 @@ sub lmsens_update {
 
 sub lmsens_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $lmsens = $config->{lmsens};
+	my @rigid = split(',', ($lmsens->{rigid} || ""));
+	my @limit = split(',', ($lmsens->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
+	my @riglim;
 	my $temp_scale = "Celsius";
 	my @tmp;
 	my @tmpz;
@@ -334,9 +432,12 @@ sub lmsens_cgi {
 		"#F29967",
 	);
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -349,19 +450,19 @@ sub lmsens_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line1;
 		my $line2;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		for($n = 0; $n < 2; $n++) {
 			$str = "mb" . $n;
 			if($lmsens->{list}->{$str}) {
@@ -410,8 +511,8 @@ sub lmsens_cgi {
 				$line2 .= "-----------------";
 			}
 		}
-		print("Time $line1\n");
-		print("-----$line2\n");
+		push(@output, "Time $line1\n");
+		push(@output, "-----$line2\n");
 		my $l;
 		my $line;
 		my @row;
@@ -476,16 +577,16 @@ sub lmsens_cgi {
 				}
 			}
 			$time = $time - (1 / $tf->{ts});
-			printf("$line1 \n", $time, @row);
+			push(@output, sprintf("$line1 \n", $time, @row));
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -500,37 +601,38 @@ sub lmsens_cgi {
 		$u = "";
 	}
 
-	my $PNG1 = $u . $package . "1." . $tf->{when} . ".png";
-	my $PNG2 = $u . $package . "2." . $tf->{when} . ".png";
-	my $PNG3 = $u . $package . "3." . $tf->{when} . ".png";
-	my $PNG4 = $u . $package . "4." . $tf->{when} . ".png";
-	my $PNG5 = $u . $package . "5." . $tf->{when} . ".png";
-	my $PNG1z = $u . $package . "1z." . $tf->{when} . ".png";
-	my $PNG2z = $u . $package . "2z." . $tf->{when} . ".png";
-	my $PNG3z = $u . $package . "3z." . $tf->{when} . ".png";
-	my $PNG4z = $u . $package . "4z." . $tf->{when} . ".png";
-	my $PNG5z = $u . $package . "5z." . $tf->{when} . ".png";
-	unlink ("$PNG_DIR" . "$PNG1",
-		"$PNG_DIR" . "$PNG2",
-		"$PNG_DIR" . "$PNG3",
-		"$PNG_DIR" . "$PNG4",
-		"$PNG_DIR" . "$PNG5");
+	my $IMG1 = $u . $package . "1." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2 = $u . $package . "2." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3 = $u . $package . "3." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG4 = $u . $package . "4." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG5 = $u . $package . "5." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG1z = $u . $package . "1z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2z = $u . $package . "2z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3z = $u . $package . "3z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG4z = $u . $package . "4z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG5z = $u . $package . "5z." . $tf->{when} . ".$imgfmt_lc";
+	unlink ("$IMG_DIR" . "$IMG1",
+		"$IMG_DIR" . "$IMG2",
+		"$IMG_DIR" . "$IMG3",
+		"$IMG_DIR" . "$IMG4",
+		"$IMG_DIR" . "$IMG5");
 	if(lc($config->{enable_zoom}) eq "y") {
-		unlink ("$PNG_DIR" . "$PNG1z",
-			"$PNG_DIR" . "$PNG2z",
-			"$PNG_DIR" . "$PNG3z",
-			"$PNG_DIR" . "$PNG4z",
-			"$PNG_DIR" . "$PNG5z");
+		unlink ("$IMG_DIR" . "$IMG1z",
+			"$IMG_DIR" . "$IMG2z",
+			"$IMG_DIR" . "$IMG3z",
+			"$IMG_DIR" . "$IMG4z",
+			"$IMG_DIR" . "$IMG5z");
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	for($n = 0; $n < 4; $n++) {
 		for($n2 = $n; $n2 < 16; $n2 += 4) {
-			$str = "core_" . $n2;
+			$str = "core" . $n2;
 			if($lmsens->{list}->{$str}) {
-				$str = sprintf("Core %2d", $n2);
+				$str = $lmsens->{desc}->{$str} ? sprintf("%7s", substr($lmsens->{desc}->{$str}, 0, 7)) : sprintf("Core %2d", $n2);
 				push(@tmp, "LINE2:core_$n2" . $LC[$n2] . ":$str\\g");
 				push(@tmp, "GPRINT:core_$n2:LAST:\\:%3.0lf      ");
 			}
@@ -540,7 +642,7 @@ sub lmsens_cgi {
 	for($n = 0; $n < 16; $n++) {
 		$str = "core" . $n;
 		if($lmsens->{list}->{$str}) {
-			$str = sprintf("Core %d", $n);
+			$str = $lmsens->{desc}->{$str} ? substr($lmsens->{desc}->{$str}, 0, 7) : sprintf("Core %2d", $n);
 			push(@tmpz, "LINE2:core_$n" . $LC[$n] . ":$str");
 		}
 	}
@@ -553,8 +655,8 @@ sub lmsens_cgi {
 		push(@tmpz, "GPRINT:core_0:LAST:%0.0lf");
 	}
 	if($title) {
-		print("    <tr>\n");
-		print("    <td valign='bottom' bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td valign='bottom' bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	if(lc($config->{temperature_scale}) eq "f") {
 		push(@CDEF, "CDEF:core_0=9,5,/,core0,*,32,+");
@@ -591,6 +693,11 @@ sub lmsens_cgi {
 		push(@CDEF, "CDEF:core_14=core14");
 		push(@CDEF, "CDEF:core_15=core15");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -598,14 +705,15 @@ sub lmsens_cgi {
 		@tmp = @tmpz;
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG1",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG1",
 		"--title=$config->{graphs}->{_lmsens1}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$temp_scale",
 		"--width=$width",
 		"--height=$height",
-		"--lower-limit=0",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$colors->{graph_colors}},
 		"DEF:core0=$rrd:lmsens_core0:AVERAGE",
@@ -624,20 +732,22 @@ sub lmsens_cgi {
 		"DEF:core13=$rrd:lmsens_core13:AVERAGE",
 		"DEF:core14=$rrd:lmsens_core14:AVERAGE",
 		"DEF:core15=$rrd:lmsens_core15:AVERAGE",
+		"CDEF:allvalues=core0,core1,core2,core3,core4,core5,core6,core7,core8,core9,core10,core11,core12,core13,core14,core15,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG1z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 			"--title=$config->{graphs}->{_lmsens1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$temp_scale",
 			"--width=$width",
 			"--height=$height",
-			"--lower-limit=0",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:core0=$rrd:lmsens_core0:AVERAGE",
@@ -656,89 +766,127 @@ sub lmsens_cgi {
 			"DEF:core13=$rrd:lmsens_core13:AVERAGE",
 			"DEF:core14=$rrd:lmsens_core14:AVERAGE",
 			"DEF:core15=$rrd:lmsens_core15:AVERAGE",
+			"CDEF:allvalues=core0,core1,core2,core3,core4,core5,core6,core7,core8,core9,core10,core11,core12,core13,core14,core15,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /lmsens1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
+	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	$lmsens->{list}->{'volt0'} =~ s/\\// if $lmsens->{list}->{'volt0'};
 	$str = $lmsens->{list}->{'volt0'} ? sprintf("%8s", substr($lmsens->{list}->{'volt0'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt0'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt0'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt0#FFA500:$str\\g", "GPRINT:volt0:LAST:\\:%6.2lf   "));
 	$lmsens->{list}->{'volt3'} =~ s/\\// if $lmsens->{list}->{'volt3'};
 	$str = $lmsens->{list}->{'volt3'} ? sprintf("%8s", substr($lmsens->{list}->{'volt3'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt3'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt3'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt3#4444EE:$str\\g", "GPRINT:volt3:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt6'} =~ s/\\// if $lmsens->{list}->{'volt6'};;
 	$str = $lmsens->{list}->{'volt6'} ? sprintf("%8s", substr($lmsens->{list}->{'volt6'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt6'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt6'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt6#EE44EE:$str\\g", "GPRINT:volt6:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt9'} =~ s/\\// if $lmsens->{list}->{'volt9'};;
 	$str = $lmsens->{list}->{'volt9'} ? sprintf("%8s", substr($lmsens->{list}->{'volt9'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt9'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt9'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt9#94C36B:$str\\g", "GPRINT:volt9:LAST:\\:%6.2lf\\g")) unless !$str;
 	push(@tmp, "COMMENT: \\n");
 	$lmsens->{list}->{'volt1'} =~ s/\\// if $lmsens->{list}->{'volt1'};;
 	$str = $lmsens->{list}->{'volt1'} ? sprintf("%8s", substr($lmsens->{list}->{'volt1'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt1'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt1'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt1#44EEEE:$str\\g", "GPRINT:volt1:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt4'} =~ s/\\// if $lmsens->{list}->{'volt4'};;
 	$str = $lmsens->{list}->{'volt4'} ? sprintf("%8s", substr($lmsens->{list}->{'volt4'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt4'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt4'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt4#448844:$str\\g", "GPRINT:volt4:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt7'} =~ s/\\// if $lmsens->{list}->{'volt7'};;
 	$str = $lmsens->{list}->{'volt7'} ? sprintf("%8s", substr($lmsens->{list}->{'volt7'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt7'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt7'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt7#EEEE44:$str\\g", "GPRINT:volt7:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt10'} =~ s/\\// if $lmsens->{list}->{'volt10'};;
 	$str = $lmsens->{list}->{'volt10'} ? sprintf("%8s", substr($lmsens->{list}->{'volt10'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt10'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt10'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt10#3CB5B0:$str\\g", "GPRINT:volt10:LAST:\\:%6.2lf\\g")) unless !$str;
 	push(@tmp, "COMMENT: \\n");
 	$lmsens->{list}->{'volt2'} =~ s/\\// if $lmsens->{list}->{'volt2'};;
 	$str = $lmsens->{list}->{'volt2'} ? sprintf("%8s", substr($lmsens->{list}->{'volt2'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt2'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt2'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt2#44EE44:$str\\g", "GPRINT:volt2:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt5'} =~ s/\\// if $lmsens->{list}->{'volt5'};;
 	$str = $lmsens->{list}->{'volt5'} ? sprintf("%8s", substr($lmsens->{list}->{'volt5'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt5'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt5'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt5#EE4444:$str\\g", "GPRINT:volt5:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt8'} =~ s/\\// if $lmsens->{list}->{'volt8'};;
 	$str = $lmsens->{list}->{'volt8'} ? sprintf("%8s", substr($lmsens->{list}->{'volt8'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt8'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt8'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt8#963C74:$str\\g", "GPRINT:volt8:LAST:\\:%6.2lf   ")) unless !$str;
 	$lmsens->{list}->{'volt11'} =~ s/\\// if $lmsens->{list}->{'volt11'};;
 	$str = $lmsens->{list}->{'volt11'} ? sprintf("%8s", substr($lmsens->{list}->{'volt11'}, 0, 8)) : "";
+	$str = $lmsens->{desc}->{'volt11'} ? sprintf("%8s", substr($lmsens->{desc}->{'volt11'}, 0, 8)) : $str;
 	push(@tmp, ("LINE2:volt11#597AB7:$str\\g", "GPRINT:volt11:LAST:\\:%6.2lf\\g")) unless !$str;
 	push(@tmp, "COMMENT: \\n");
 	$str = $lmsens->{list}->{'volt0'} ? substr($lmsens->{list}->{'volt0'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt0'} ? substr($lmsens->{desc}->{'volt0'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt0#FFA500:$str");
 	$str = $lmsens->{list}->{'volt1'} ? substr($lmsens->{list}->{'volt1'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt1'} ? substr($lmsens->{desc}->{'volt1'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt1#44EEEE:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt2'} ? substr($lmsens->{list}->{'volt2'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt2'} ? substr($lmsens->{desc}->{'volt2'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt2#44EE44:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt3'} ? substr($lmsens->{list}->{'volt3'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt3'} ? substr($lmsens->{desc}->{'volt3'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt3#4444EE:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt4'} ? substr($lmsens->{list}->{'volt4'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt4'} ? substr($lmsens->{desc}->{'volt4'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt4#448844:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt5'} ? substr($lmsens->{list}->{'volt5'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt5'} ? substr($lmsens->{desc}->{'volt5'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt5#EE4444:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt6'} ? substr($lmsens->{list}->{'volt6'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt6'} ? substr($lmsens->{desc}->{'volt6'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt6#EE44EE:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt7'} ? substr($lmsens->{list}->{'volt7'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt7'} ? substr($lmsens->{desc}->{'volt7'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt7#EEEE44:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt8'} ? substr($lmsens->{list}->{'volt8'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt8'} ? substr($lmsens->{desc}->{'volt8'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt8#963C74:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt9'} ? substr($lmsens->{list}->{'volt9'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt9'} ? substr($lmsens->{desc}->{'volt9'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt9#94C36B:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt10'} ? substr($lmsens->{list}->{'volt10'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt10'} ? substr($lmsens->{desc}->{'volt10'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt10#3CB5B0:$str")unless !$str;
 	$str = $lmsens->{list}->{'volt11'} ? substr($lmsens->{list}->{'volt11'}, 0, 8) : "";
+	$str = $lmsens->{desc}->{'volt11'} ? substr($lmsens->{desc}->{'volt11'}, 0, 8) : $str;
 	push(@tmpz, "LINE2:volt11#597AB7:$str") unless !$str;
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) 
@@ -749,14 +897,16 @@ sub lmsens_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG2",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG2",
 		"--title=$config->{graphs}->{_lmsens2}  ($tf->{nwhen}$tf->{twhen})
 		",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=Volts",
 		"--width=$width",
 		"--height=$height",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$colors->{graph_colors}},
 		"DEF:volt0=$rrd:lmsens_volt0:AVERAGE",
@@ -771,18 +921,22 @@ sub lmsens_cgi {
 		"DEF:volt9=$rrd:lmsens_volt9:AVERAGE",
 		"DEF:volt10=$rrd:lmsens_volt10:AVERAGE",
 		"DEF:volt11=$rrd:lmsens_volt11:AVERAGE",
+		"CDEF:allvalues=volt0,volt1,volt2,volt3,volt4,volt5,volt6,volt7,volt8,volt9,volt10,volt11,+,+,+,+,+,+,+,+,+,+,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG2z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
 			"--title=$config->{graphs}->{_lmsens2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Volts",
 			"--width=$width",
 			"--height=$height",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:volt0=$rrd:lmsens_volt0:AVERAGE",
@@ -797,44 +951,66 @@ sub lmsens_cgi {
 			"DEF:volt9=$rrd:lmsens_volt9:AVERAGE",
 			"DEF:volt10=$rrd:lmsens_volt10:AVERAGE",
 			"DEF:volt11=$rrd:lmsens_volt11:AVERAGE",
+			"CDEF:allvalues=volt0,volt1,volt2,volt3,volt4,volt5,volt6,volt7,volt8,volt9,volt10,volt11,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /lmsens2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
-	undef(@CDEF);
+	@riglim = @{setup_riglim($rigid[2], $limit[2])};
 	undef(@tmp);
 	undef(@tmpz);
-	push(@tmp, ("LINE2:mb_0#FFA500:MB 0\\g", "GPRINT:mb_0:LAST:\\:%3.0lf   "));
-	push(@tmp, ("LINE2:cpu_0#4444EE:CPU 0\\g", "GPRINT:cpu_0:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'cpu0'};
-	push(@tmp, ("LINE2:cpu_2#EE44EE:CPU 2\\g", "GPRINT:cpu_2:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'cpu2'};
+	undef(@CDEF);
+	$str = $lmsens->{desc}->{'mb0'} ? sprintf("%5s", substr($lmsens->{desc}->{'mb0'}, 0, 5)) : "MB  0";
+	push(@tmp, ("LINE2:mb_0#FFA500:$str\\g", "GPRINT:mb_0:LAST:\\:%3.0lf   "));
+	$str = $lmsens->{desc}->{'cpu0'} ? sprintf("%5s", substr($lmsens->{desc}->{'cpu0'}, 0, 5)) : "CPU 0";
+	push(@tmp, ("LINE2:cpu_0#4444EE:$str\\g", "GPRINT:cpu_0:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'cpu0'};
+	$str = $lmsens->{desc}->{'cpu2'} ? sprintf("%5s", substr($lmsens->{desc}->{'cpu2'}, 0, 5)) : "CPU 2";
+	push(@tmp, ("LINE2:cpu_2#EE44EE:$str\\g", "GPRINT:cpu_2:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'cpu2'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmp, ("LINE2:mb_1#44EEEE:MB 1\\g", "GPRINT:mb_1:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'mb1'};
-	push(@tmp, ("LINE2:cpu_1#EEEE44:CPU 1\\g", "GPRINT:cpu_1:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'cpu1'};
-	push(@tmp, ("LINE2:cpu_3#44EE44:CPU 3\\g", "GPRINT:cpu_3:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'cpu3'};
+	$str = $lmsens->{desc}->{'mb1'} ? sprintf("%5s", substr($lmsens->{desc}->{'mb1'}, 0, 5)) : "MB  1";
+	push(@tmp, ("LINE2:mb_1#44EEEE:$str\\g", "GPRINT:mb_1:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'mb1'};
+	$str = $lmsens->{desc}->{'cpu1'} ? sprintf("%5s", substr($lmsens->{desc}->{'cpu1'}, 0, 5)) : "CPU 1";
+	push(@tmp, ("LINE2:cpu_1#EEEE44:$str\\g", "GPRINT:cpu_1:LAST:\\:%3.0lf   ")) unless !$lmsens->{list}->{'cpu1'};
+	$str = $lmsens->{desc}->{'cpu3'} ? sprintf("%5s", substr($lmsens->{desc}->{'cpu3'}, 0, 5)) : "CPU 3";
+	push(@tmp, ("LINE2:cpu_3#44EE44:$str\\g", "GPRINT:cpu_3:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'cpu3'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmpz, "LINE2:mb_0#FFA500:MB 0");
-	push(@tmpz, "LINE2:mb_1#44EEEE:MB 1") unless !$lmsens->{list}->{'mb1'};
-	push(@tmpz, "LINE2:cpu_0#4444EE:CPU 0") unless !$lmsens->{list}->{'cpu0'};
-	push(@tmpz, "LINE2:cpu_1#EEEE44:CPU 1") unless !$lmsens->{list}->{'cpu1'};
-	push(@tmpz, "LINE2:cpu_2#EE44EE:CPU 2") unless !$lmsens->{list}->{'cpu2'};
-	push(@tmpz, "LINE2:cpu_3#44EE44:CPU 3") unless !$lmsens->{list}->{'cpu3'};
+
+	$str = $lmsens->{desc}->{'mb0'} ? substr($lmsens->{desc}->{'mb0'}, 0, 8) : "MB 0";
+	push(@tmpz, "LINE2:mb_0#FFA500:$str");
+	$str = $lmsens->{desc}->{'mb1'} ? substr($lmsens->{desc}->{'mb1'}, 0, 8) : "MB 1";
+	push(@tmpz, "LINE2:mb_1#44EEEE:$str") unless !$lmsens->{list}->{'mb1'};
+	$str = $lmsens->{desc}->{'cpu0'} ? substr($lmsens->{desc}->{'cpu0'}, 0, 8) : "CPU 0";
+	push(@tmpz, "LINE2:cpu_0#4444EE:$str") unless !$lmsens->{list}->{'cpu0'};
+	$str = $lmsens->{desc}->{'cpu1'} ? substr($lmsens->{desc}->{'cpu1'}, 0, 8) : "CPU 1";
+	push(@tmpz, "LINE2:cpu_1#EEEE44:$str") unless !$lmsens->{list}->{'cpu1'};
+	$str = $lmsens->{desc}->{'cpu2'} ? substr($lmsens->{desc}->{'cpu2'}, 0, 8) : "CPU 2";
+	push(@tmpz, "LINE2:cpu_2#EE44EE:$str") unless !$lmsens->{list}->{'cpu2'};
+	$str = $lmsens->{desc}->{'cpu3'} ? substr($lmsens->{desc}->{'cpu3'}, 0, 8) : "CPU 3";
+	push(@tmpz, "LINE2:cpu_3#44EE44:$str") unless !$lmsens->{list}->{'cpu3'};
 	if(lc($config->{temperature_scale}) eq "f") {
 		push(@CDEF, "CDEF:mb_0=9,5,/,mb0,*,32,+");
 		push(@CDEF, "CDEF:mb_1=9,5,/,mb1,*,32,+");
@@ -850,6 +1026,11 @@ sub lmsens_cgi {
 		push(@CDEF, "CDEF:cpu_2=cpu2");
 		push(@CDEF, "CDEF:cpu_3=cpu3");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -858,14 +1039,15 @@ sub lmsens_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG3",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG3",
 		"--title=$config->{graphs}->{_lmsens3}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$temp_scale",
 		"--width=$width",
 		"--height=$height",
-		"--lower-limit=0",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -875,21 +1057,23 @@ sub lmsens_cgi {
 		"DEF:cpu1=$rrd:lmsens_cpu1:AVERAGE",
 		"DEF:cpu2=$rrd:lmsens_cpu2:AVERAGE",
 		"DEF:cpu3=$rrd:lmsens_cpu3:AVERAGE",
+		"CDEF:allvalues=mb0,mb1,cpu0,cpu1,cpu2,cpu3,+,+,+,+,+",
 		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG3z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
 			"--title=$config->{graphs}->{_lmsens3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$temp_scale",
 			"--width=$width",
 			"--height=$height",
-			"--lower-limit=0",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -899,47 +1083,80 @@ sub lmsens_cgi {
 			"DEF:cpu1=$rrd:lmsens_cpu1:AVERAGE",
 			"DEF:cpu2=$rrd:lmsens_cpu2:AVERAGE",
 			"DEF:cpu3=$rrd:lmsens_cpu3:AVERAGE",
+			"CDEF:allvalues=mb0,mb1,cpu0,cpu1,cpu2,cpu3,+,+,+,+,+",
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /lmsens3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
+	@riglim = @{setup_riglim($rigid[3], $limit[3])};
 	undef(@tmp);
 	undef(@tmpz);
-	push(@tmp, ("LINE2:fan0#FFA500:Fan 0\\g", "GPRINT:fan0:LAST:\\:%5.0lf"));
-	push(@tmp, ("LINE2:fan3#4444EE:Fan 3\\g", "GPRINT:fan3:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan3'};
-	push(@tmp, ("LINE2:fan6#EE44EE:Fan 6\\g", "GPRINT:fan6:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan6'};
+	undef(@CDEF);
+	$str = $lmsens->{desc}->{'fan0'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan0'}, 0, 5)) : "Fan 0";
+	push(@tmp, ("LINE2:fan0#FFA500:$str\\g", "GPRINT:fan0:LAST:\\:%5.0lf"));
+	$str = $lmsens->{desc}->{'fan3'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan3'}, 0, 5)) : "Fan 3";
+	push(@tmp, ("LINE2:fan3#4444EE:$str\\g", "GPRINT:fan3:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan3'};
+	$str = $lmsens->{desc}->{'fan6'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan6'}, 0, 5)) : "Fan 6";
+	push(@tmp, ("LINE2:fan6#EE44EE:$str\\g", "GPRINT:fan6:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan6'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmp, ("LINE2:fan1#44EEEE:Fan 1\\g", "GPRINT:fan1:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan1'};
-	push(@tmp, ("LINE2:fan4#448844:Fan 4\\g", "GPRINT:fan4:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan4'};
-	push(@tmp, ("LINE2:fan7#EEEE44:Fan 7\\g", "GPRINT:fan7:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan7'};
+	$str = $lmsens->{desc}->{'fan1'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan1'}, 0, 5)) : "Fan 1";
+	push(@tmp, ("LINE2:fan1#44EEEE:$str\\g", "GPRINT:fan1:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan1'};
+	$str = $lmsens->{desc}->{'fan4'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan4'}, 0, 5)) : "Fan 4";
+	push(@tmp, ("LINE2:fan4#448844:$str\\g", "GPRINT:fan4:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan4'};
+	$str = $lmsens->{desc}->{'fan7'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan7'}, 0, 5)) : "Fan 7";
+	push(@tmp, ("LINE2:fan7#EEEE44:$str\\g", "GPRINT:fan7:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan7'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmp, ("LINE2:fan2#44EE44:Fan 2\\g", "GPRINT:fan2:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan2'};
-	push(@tmp, ("LINE2:fan5#EE4444:Fan 5\\g", "GPRINT:fan5:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan5'};
-	push(@tmp, ("LINE2:fan8#963C74:Fan 8\\g", "GPRINT:fan8:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan8'};
+	$str = $lmsens->{desc}->{'fan2'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan2'}, 0, 5)) : "Fan 2";
+	push(@tmp, ("LINE2:fan2#44EE44:$str\\g", "GPRINT:fan2:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan2'};
+	$str = $lmsens->{desc}->{'fan5'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan5'}, 0, 5)) : "Fan 5";
+	push(@tmp, ("LINE2:fan5#EE4444:$str\\g", "GPRINT:fan5:LAST:\\:%5.0lf")) unless !$lmsens->{list}->{'fan5'};
+	$str = $lmsens->{desc}->{'fan8'} ? sprintf("%5s", substr($lmsens->{desc}->{'fan8'}, 0, 5)) : "Fan 8";
+	push(@tmp, ("LINE2:fan8#963C74:$str\\g", "GPRINT:fan8:LAST:\\:%5.0lf\\g")) unless !$lmsens->{list}->{'fan8'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmpz, "LINE2:fan0#FFA500:Fan 0");
-	push(@tmpz, "LINE2:fan1#44EEEE:Fan 1") unless !$lmsens->{list}->{'fan1'};
-	push(@tmpz, "LINE2:fan2#44EE44:Fan 2") unless !$lmsens->{list}->{'fan2'};
-	push(@tmpz, "LINE2:fan3#4444EE:Fan 3") unless !$lmsens->{list}->{'fan3'};
-	push(@tmpz, "LINE2:fan4#448844:Fan 4") unless !$lmsens->{list}->{'fan4'};
-	push(@tmpz, "LINE2:fan5#EE4444:Fan 5") unless !$lmsens->{list}->{'fan5'};
-	push(@tmpz, "LINE2:fan6#EE44EE:Fan 6") unless !$lmsens->{list}->{'fan6'};
-	push(@tmpz, "LINE2:fan7#EEEE44:Fan 7") unless !$lmsens->{list}->{'fan7'};
-	push(@tmpz, "LINE2:fan8#963C74:Fan 8") unless !$lmsens->{list}->{'fan8'};
+
+	$str = $lmsens->{desc}->{'fan0'} ? substr($lmsens->{desc}->{'fan0'}, 0, 8) : "Fan 0";
+	push(@tmpz, "LINE2:fan0#FFA500:$str");
+	$str = $lmsens->{desc}->{'fan1'} ? substr($lmsens->{desc}->{'fan1'}, 0, 8) : "Fan 1";
+	push(@tmpz, "LINE2:fan1#44EEEE:$str") unless !$lmsens->{list}->{'fan1'};
+	$str = $lmsens->{desc}->{'fan2'} ? substr($lmsens->{desc}->{'fan2'}, 0, 8) : "Fan 2";
+	push(@tmpz, "LINE2:fan2#44EE44:$str") unless !$lmsens->{list}->{'fan2'};
+	$str = $lmsens->{desc}->{'fan3'} ? substr($lmsens->{desc}->{'fan3'}, 0, 8) : "Fan 3";
+	push(@tmpz, "LINE2:fan3#4444EE:$str") unless !$lmsens->{list}->{'fan3'};
+	$str = $lmsens->{desc}->{'fan4'} ? substr($lmsens->{desc}->{'fan4'}, 0, 8) : "Fan 4";
+	push(@tmpz, "LINE2:fan4#448844:$str") unless !$lmsens->{list}->{'fan4'};
+	$str = $lmsens->{desc}->{'fan5'} ? substr($lmsens->{desc}->{'fan5'}, 0, 8) : "Fan 5";
+	push(@tmpz, "LINE2:fan5#EE4444:$str") unless !$lmsens->{list}->{'fan5'};
+	$str = $lmsens->{desc}->{'fan6'} ? substr($lmsens->{desc}->{'fan6'}, 0, 8) : "Fan 6";
+	push(@tmpz, "LINE2:fan6#EE44EE:$str") unless !$lmsens->{list}->{'fan6'};
+	$str = $lmsens->{desc}->{'fan7'} ? substr($lmsens->{desc}->{'fan7'}, 0, 8) : "Fan 7";
+	push(@tmpz, "LINE2:fan7#EEEE44:$str") unless !$lmsens->{list}->{'fan7'};
+	$str = $lmsens->{desc}->{'fan8'} ? substr($lmsens->{desc}->{'fan8'}, 0, 8) : "Fan 8";
+	push(@tmpz, "LINE2:fan8#963C74:$str") unless !$lmsens->{list}->{'fan8'};
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -948,14 +1165,15 @@ sub lmsens_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG4",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG4",
 		"--title=$config->{graphs}->{_lmsens4}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=RPM",
 		"--width=$width",
 		"--height=$height",
-		"--lower-limit=0",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -968,20 +1186,23 @@ sub lmsens_cgi {
 		"DEF:fan6=$rrd:lmsens_fan6:AVERAGE",
 		"DEF:fan7=$rrd:lmsens_fan7:AVERAGE",
 		"DEF:fan8=$rrd:lmsens_fan8:AVERAGE",
+		"CDEF:allvalues=fan0,fan1,fan2,fan3,fan4,fan5,fan6,fan7,fan8,+,+,+,+,+,+,+,+",
+		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG4: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG4z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG4z",
 			"--title=$config->{graphs}->{_lmsens4}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=RPM",
 			"--width=$width",
 			"--height=$height",
-			"--lower-limit=0",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -994,48 +1215,76 @@ sub lmsens_cgi {
 			"DEF:fan6=$rrd:lmsens_fan6:AVERAGE",
 			"DEF:fan7=$rrd:lmsens_fan7:AVERAGE",
 			"DEF:fan8=$rrd:lmsens_fan8:AVERAGE",
+			"CDEF:allvalues=fan0,fan1,fan2,fan3,fan4,fan5,fan6,fan7,fan8,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG4z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /lmsens4/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG4 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG4z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG4 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
 		}
 	}
 
-	undef(@CDEF);
+	@riglim = @{setup_riglim($rigid[4], $limit[4])};
 	undef(@tmp);
 	undef(@tmpz);
-	push(@tmp, "LINE2:gpu_0#FFA500:GPU 0\\g");
+	undef(@CDEF);
+	$str = $lmsens->{desc}->{'gpu0'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu0'}, 0, 5)) : "GPU 0";
+	push(@tmp, "LINE2:gpu_0#FFA500:$str\\g");
 	push(@tmp, "GPRINT:gpu_0:LAST:\\:%3.0lf  ");
-	push(@tmp, ("LINE2:gpu_3#4444EE:GPU 3\\g", "GPRINT:gpu_3:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu3'};
-	push(@tmp, ("LINE2:gpu_6#EE44EE:GPU 6\\g", "GPRINT:gpu_6:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu6'};
+	$str = $lmsens->{desc}->{'gpu3'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu3'}, 0, 5)) : "GPU 3";
+	push(@tmp, ("LINE2:gpu_3#4444EE:$str\\g", "GPRINT:gpu_3:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu3'};
+	$str = $lmsens->{desc}->{'gpu6'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu6'}, 0, 5)) : "GPU 6";
+	push(@tmp, ("LINE2:gpu_6#EE44EE:$str\\g", "GPRINT:gpu_6:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu6'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmp, ("LINE2:gpu_1#44EEEE:GPU 1\\g", "GPRINT:gpu_1:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu1'};
-	push(@tmp, ("LINE2:gpu_4#448844:GPU 4\\g", "GPRINT:gpu_4:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu4'};
-	push(@tmp, ("LINE2:gpu_7#EEEE44:GPU 7\\g", "GPRINT:gpu_7:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu7'};
+	$str = $lmsens->{desc}->{'gpu1'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu1'}, 0, 5)) : "GPU 1";
+	push(@tmp, ("LINE2:gpu_1#44EEEE:$str\\g", "GPRINT:gpu_1:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu1'};
+	$str = $lmsens->{desc}->{'gpu4'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu4'}, 0, 5)) : "GPU 4";
+	push(@tmp, ("LINE2:gpu_4#448844:$str\\g", "GPRINT:gpu_4:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu4'};
+	$str = $lmsens->{desc}->{'gpu7'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu7'}, 0, 5)) : "GPU 7";
+	push(@tmp, ("LINE2:gpu_7#EEEE44:$str\\g", "GPRINT:gpu_7:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu7'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmp, ("LINE2:gpu_2#44EE44:GPU 2\\g", "GPRINT:gpu_2:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu2'};
-	push(@tmp, ("LINE2:gpu_5#EE4444:GPU 5\\g", "GPRINT:gpu_5:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu5'};
-	push(@tmp, ("LINE2:gpu_8#963C74:GPU 8\\g", "GPRINT:gpu_8:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu8'};
+	$str = $lmsens->{desc}->{'gpu2'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu2'}, 0, 5)) : "GPU 2";
+	push(@tmp, ("LINE2:gpu_2#44EE44:$str\\g", "GPRINT:gpu_2:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu2'};
+	$str = $lmsens->{desc}->{'gpu5'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu5'}, 0, 5)) : "GPU 5";
+	push(@tmp, ("LINE2:gpu_5#EE4444:$str\\g", "GPRINT:gpu_5:LAST:\\:%3.0lf  ")) unless !$lmsens->{list}->{'gpu5'};
+	$str = $lmsens->{desc}->{'gpu8'} ? sprintf("%5s", substr($lmsens->{desc}->{'gpu8'}, 0, 5)) : "GPU 8";
+	push(@tmp, ("LINE2:gpu_8#963C74:$str\\g", "GPRINT:gpu_8:LAST:\\:%3.0lf\\g")) unless !$lmsens->{list}->{'gpu8'};
 	push(@tmp, "COMMENT: \\n");
-	push(@tmpz, "LINE2:gpu_0#FFA500:GPU 0\\g");
-	push(@tmpz, "LINE2:gpu_1#44EEEE:GPU 1\\g") unless !$lmsens->{list}->{'gpu1'};
-	push(@tmpz, "LINE2:gpu_2#44EE44:GPU 2\\g") unless !$lmsens->{list}->{'gpu2'};
-	push(@tmpz, "LINE2:gpu_3#4444EE:GPU 3\\g") unless !$lmsens->{list}->{'gpu3'};
-	push(@tmpz, "LINE2:gpu_4#448844:GPU 4\\g") unless !$lmsens->{list}->{'gpu4'};
-	push(@tmpz, "LINE2:gpu_5#EE4444:GPU 5\\g") unless !$lmsens->{list}->{'gpu5'};
-	push(@tmpz, "LINE2:gpu_6#EE44EE:GPU 6\\g") unless !$lmsens->{list}->{'gpu6'};
-	push(@tmpz, "LINE2:gpu_7#EEEE44:GPU 7\\g") unless !$lmsens->{list}->{'gpu7'};
-	push(@tmpz, "LINE2:gpu_8#963C74:GPU 8\\g") unless !$lmsens->{list}->{'gpu8'};
+
+	$str = $lmsens->{desc}->{'gpu0'} ? substr($lmsens->{desc}->{'gpu0'}, 0, 8) : "GPU 0";
+	push(@tmpz, "LINE2:gpu_0#FFA500:$str\\g");
+	$str = $lmsens->{desc}->{'gpu1'} ? substr($lmsens->{desc}->{'gpu1'}, 0, 8) : "GPU 1";
+	push(@tmpz, "LINE2:gpu_1#44EEEE:$str\\g") unless !$lmsens->{list}->{'gpu1'};
+	$str = $lmsens->{desc}->{'gpu2'} ? substr($lmsens->{desc}->{'gpu2'}, 0, 8) : "GPU 2";
+	push(@tmpz, "LINE2:gpu_2#44EE44:$str\\g") unless !$lmsens->{list}->{'gpu2'};
+	$str = $lmsens->{desc}->{'gpu3'} ? substr($lmsens->{desc}->{'gpu3'}, 0, 8) : "GPU 3";
+	push(@tmpz, "LINE2:gpu_3#4444EE:$str\\g") unless !$lmsens->{list}->{'gpu3'};
+	$str = $lmsens->{desc}->{'gpu4'} ? substr($lmsens->{desc}->{'gpu4'}, 0, 8) : "GPU 4";
+	push(@tmpz, "LINE2:gpu_4#448844:$str\\g") unless !$lmsens->{list}->{'gpu4'};
+	$str = $lmsens->{desc}->{'gpu5'} ? substr($lmsens->{desc}->{'gpu5'}, 0, 8) : "GPU 5";
+	push(@tmpz, "LINE2:gpu_5#EE4444:$str\\g") unless !$lmsens->{list}->{'gpu5'};
+	$str = $lmsens->{desc}->{'gpu6'} ? substr($lmsens->{desc}->{'gpu6'}, 0, 8) : "GPU 6";
+	push(@tmpz, "LINE2:gpu_6#EE44EE:$str\\g") unless !$lmsens->{list}->{'gpu6'};
+	$str = $lmsens->{desc}->{'gpu7'} ? substr($lmsens->{desc}->{'gpu7'}, 0, 8) : "GPU 7";
+	push(@tmpz, "LINE2:gpu_7#EEEE44:$str\\g") unless !$lmsens->{list}->{'gpu7'};
+	$str = $lmsens->{desc}->{'gpu8'} ? substr($lmsens->{desc}->{'gpu8'}, 0, 8) : "GPU 8";
+	push(@tmpz, "LINE2:gpu_8#963C74:$str\\g") unless !$lmsens->{list}->{'gpu8'};
 	if(lc($config->{temperature_scale}) eq "f") {
 		push(@CDEF, "CDEF:gpu_0=9,5,/,gpu0,*,32,+");
 		push(@CDEF, "CDEF:gpu_1=9,5,/,gpu1,*,32,+");
@@ -1057,6 +1306,11 @@ sub lmsens_cgi {
 		push(@CDEF, "CDEF:gpu_7=gpu7");
 		push(@CDEF, "CDEF:gpu_8=gpu8");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -1065,15 +1319,16 @@ sub lmsens_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG5",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG5",
 		"--title=$config->{graphs}->{_lmsens5}  ($tf->{nwhen}$tf->{twhen})
 		",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$temp_scale",
 		"--width=$width",
 		"--height=$height",
-		"--lower-limit=0",
+		@riglim,
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -1086,21 +1341,23 @@ sub lmsens_cgi {
 		"DEF:gpu6=$rrd:lmsens_gpu6:AVERAGE",
 		"DEF:gpu7=$rrd:lmsens_gpu7:AVERAGE",
 		"DEF:gpu8=$rrd:lmsens_gpu8:AVERAGE",
+		"CDEF:allvalues=gpu0,gpu1,gpu2,gpu3,gpu4,gpu5,gpu6,gpu7,gpu8,+,+,+,+,+,+,+,+",
 		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG5: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG5z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG5z",
 			"--title=$config->{graphs}->{_lmsens5}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$temp_scale",
 			"--width=$width",
 			"--height=$height",
-			"--lower-limit=0",
+			@riglim,
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -1113,32 +1370,39 @@ sub lmsens_cgi {
 			"DEF:gpu6=$rrd:lmsens_gpu6:AVERAGE",
 			"DEF:gpu7=$rrd:lmsens_gpu7:AVERAGE",
 			"DEF:gpu8=$rrd:lmsens_gpu8:AVERAGE",
+			"CDEF:allvalues=gpu0,gpu1,gpu2,gpu3,gpu4,gpu5,gpu6,gpu7,gpu8,+,+,+,+,+,+,+,+",
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG5z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /lmsens5/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG5 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG5z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG5 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
 		}
 	}
 
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

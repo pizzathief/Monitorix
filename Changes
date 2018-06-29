@@ -1,3 +1,558 @@
+3.NN.N - DD-MMM-2018
+====================
+- Added a complete graph to support external ambient sensors ('ambsens.pm').
+  	(suggested by Zdenko Dolar, zdenko.dolar AT gmail.com)
+- Added an advice in monitorix.conf(5) as a reminder that some default values
+  are overwritten in the configuration files on certain systems.
+  	(suggested by Sander Bos)
+- Changed the way how the Used value in Memory graph is calculated. [#204]
+- Changed the alert in 'system.pm' to use the minimum value between the second
+  and the third load averages to obtain a more symmetric curve and a sooner
+  cancellation of the alert.
+  	(suggested by Michael Tosch)
+- Added two new graphs (operations and bandwidth) for each pool in 'zfs.pm' to
+  show iostats. [#190]
+- Fixed a bad memory scaling in *BSD systems.
+- Fixed in 'process.pm' to fully honour the option 'netstats_in_bps'.
+- Fixed to force Monitorix to be started at the end of boot in systemd-based
+  systems. This should fix a problem with 'traffacct.pm' and iptables.
+- Fixed the missing declaration of 'allvalues' in 'gensens.pm' which prevented
+  graphs generation if 'show_gaps' option was enabled.
+- Fixed to correctly represent the values in text mode in 'ipmi.pm'.
+- Fixed a missalignment of the MB & CPU temperatures values in 'lmsens.pm'.
+- Fixed to limit the length of the device names in 'fs.pm'.
+- Fixed a missing gap colouring in some zoomed graphs of 'system.pm'.
+- Fixed to save missing values as 'unknown' in 'apcupsd.pm'. [#201]
+- Fixed a XSS vulnerability in CGI variables. [#203]
+	(thanks to Sebastian Gilon from http://testarmy.com/, who pointed this out)
+- Fixed to check if setgid() and setuid() functions were successful before
+  starting the HTTP built-in.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed to disable 'echo' when typing the password in './htpasswd.pl'.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed to set permissions 0600 to log files.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed in 'zfs.pm' the way how is collected pool's data.
+	(thanks to Derek Dongray, derek AT valedon.co.uk)
+
+
+3.10.0 - 25-Sep-2017
+====================
+- Added a complete graph for IPMI sensors using the 'ipmitool' command.
+  	(suggested by Frank Dijcks, fd AT fdsystems.nl)
+- Added a complete graph for MongoDB. [#38]
+- Added a back button in the upper-left corner to easily go to the main page
+  in browsers with fullscreen mode. The button will appear only if the new
+  option called 'enable_back_button' is enabled (disabled by default).
+- Improved the 'system.pm' graph with more detailed information about processes
+  (sleeping, waiting I/O, zombie, stopped, paging and running). It also
+  includes two new graphs to show entropy and uptime.
+- Changed the way how scales the memory graph in 'system.pm', now the units are
+  in bytes, so the y-axis will scale accordingly.
+- Changed to be more thickness the lines of Greylisting graph in 'mail.pm'.
+- Changed the colors of the main graph in 'ftp.pm'.
+- Introduced the option 'enable_parallelizing' in order to speed up the graph
+  generation in multi-core systems.
+- Added a new option in 'port.rrd' to enable/disable background red color for
+  each port monitored. [#182]
+- Added to be able to change the real names in the Voltage graph. [#183]
+- From now on the perl-HTTP-Server-Simple module only is loaded if the HTTP
+  built-in is enabled. This will permit to separate the HTTP built-in in a
+  different package.
+- Added French translation to monthly reports.
+        (thanks to Sylvain Gomez, sylvaingomez AT free.fr)
+- Added support of Postgrey (Postfix Greylisting) in 'mail.pm'. [#102]
+        (thanks to Malte Kubat, M.Kubat AT csb-it.de)
+- Updated to 4.01 the HTML DOCTYPE declarations.
+- Added more precision to the values in 'gensens.pm'.
+- Added string encoding to avoid the message 'Wide character in print at
+  ./monitorix.cgi line ...'. [#186]
+- Added to force a standard locale in 'port.pm'. in order to be able for
+  Monitorix to read the output of system commands (netstat, ...). [#186]
+- Added the new option 'stats_rate' in 'mail.pm' to be able to choose between
+  'real' (new default) and 'per_second'.
+- Added the ability to include an alert for each defined sensor in 'gensens.pm'.
+- Added the ability to include an alert for each defined sensor in 'hptemp.pm'.
+- Added the ability to include an alert for each defined sensor in 'ipmi.pm'.
+- Added alert capabilities to 'lmsens.pm'. [#171]
+- Added the ability to include an alert for each defined sensor in 'nvidia.pm'.
+- Added the ability to monitor unlimited network interfaces in 'net.pm'. [#188]
+- Added active and inactive memory values in 'system.pm'.
+- Fixed an undeclared global symbol "$imgfmt_lc" in 'traffacct.pm'.
+- Fixed the MIME type of graphs in 'emailreports.pm' and in 'traffacct.pm' to
+  honor the 'image_format' option. [#174]
+- Make whole word and radio button clickable. [#185]
+- Fixed in 'emailreports.pm' to name each attached graph correctly.
+- Fixed the message 'Odd number of elements in hash assignment' in
+  HTTPServer.pm line 58, generated by a malformed line in the 'htpasswd' file.
+  Now it warns about such malformed line in the HTTP built-in log.
+- Fixed to honour the change of names in the zoomed in graph of Cores. [#183]
+- Fixed the title in the header of the page to match with the current 'when='
+  value.
+
+
+3.9.0  - 14-Oct-2016
+====================
+- Added a complete graph for Linux Traffic Control with the 'tc' command. [#74]
+- Added a complete graph for Chrony using the 'chronyc' command.
+- Added a complete graph for generic sensors (in /sys/devices). [#159]
+- Added the option 'cmd' in 'libvirt.pm' in order to be able to execute a
+  custom command like 'virsh -r -c qemu:///session'.
+  	(suggested by Pavel Bauer, pbauer AT algotech.cz)
+- Added in 'libvirt.pm' the ability to support multiple disks and network
+  interfaces for each virtual machine.
+  	(suggested by Pavel Bauer, pbauer AT algotech.cz)
+- Added in 'du.pm' the new 'extra_args' option to be able to include extra
+  arguments to the 'du' command.
+  	(suggested by Pete Perfetti, pete.perfetti AT protonmail.com)
+- Added the new option 'priority' to set the priority value in which Monitorix
+  will run.
+- Added the new option 'image_format' to specify the file format of each
+  generated graph. [#132]
+- Added name substring match in 'process.pm'. [#136]
+- Added the new option 'enable_hourly_view' which enables the ability to select
+  the hourly view in the main page.
+- Added the new option 'user_agent_id' which is used to define the string to
+  identify Monitorix agent in the HTTP requests. That value is sent as the
+  "User-Agent" header.
+	(suggested by Dan Criel, dancriel AT gmail.com)
+- Removed 'max_historic_years' limitation of 5 years. [#145]
+- No longer needed to have also reports enabled in 'traffacct.pm' to generate
+  daily traffic counters.
+- Added a warning message in 'disk.pm' that if some of the disk devices defined
+  is not present in the system the initialization will be aborted. [#151]
+- Added a message in 'libvirt.pm' if the MAC address of a VM is not found.
+- Added Slovak translation to monthly reports. [#157]
+- Improved a bit the documentation of socked type in MySQL. [#47]
+- Included the Status Word 'o' when selecting the peer in 'ntp.pm'.
+	(suggested by Jeroen Kik, monitorix AT steelyard.nl)
+- Added to show real names in 'lmsens.pm'. [#161]
+- Fixed in 'libvirt.pm' limiting to 100 all CPU values greater than 100.
+- Fixed in 'libvirt.pm' to hide empty groups.
+  	(thanks to Pavel Bauer, pbauer AT algotech.cz for pointing this out)
+- Fixed 'serv.pm' to support newer versions of fail2ban.
+- Fixed to show the memory usage correctly in 'phpapc.pm'.
+- Fixed in 'zfs.pm' to convert FRAG to a numeric value if it's not used in the
+  pool. [#138]
+- Fixed a possible uninitialized value in 'HTTPServer.pm' at line 37.
+- Fixed wrong processor number value parsed in 'proc.pm'. [#155]
+- Fixed to convert the BIND's output when there is only one hit in 'incoming
+  queries' in 'bind.pm'.
+- Fixed a long-standing pair of typos in 'kern.pm'.
+	(thanks to Tom Canty, from ServerCare, Inc. for pointing this out)
+
+
+3.8.1  - 13-Nov-2015
+====================
+- Added support in ZFS graph for versions older than 0.6.4.
+- Added the new option 'extra_args' in 'ntp.pm' to be able to include extra
+  arguments to the command executed by Monitorix.
+	(suggested by Matti Pentti, Matti.Pentti AT cimcorp.com)
+- Added SMART temperature ID 190 as a fallback option if 194 is missing. [#121]
+- Fixed a missing identifier in sprintf(). [#109]
+- Fixed a message of 'use of uninitialized value' in 'port.pm'. [#110]
+- Fixed the Y-axis title in 'fail2ban.pm'. [#111]
+- Fixed to avoid negative values in the network graph of 'process.pm'. [#117]
+- Fixed to force a rigid scale in the memory graph.
+	(thanks to Lane Russell, lanerussell028 AT gmail.com for pointing this out)
+- Fixed the scale of the y-axis in 'du'.
+- Fixed a DOM based XSS and a potential DoS vulnerabilities that affected the
+  'when' parameter of the 'monitorix.cgi' file.
+	(thanks to Dolev Farhi, farhi AT F5.com for pointing this out)
+- Small cosmetic changes.
+
+
+3.8.0  - 16-Sep-2015
+====================
+- Added a complete graph for the 'du' command.
+	(suggested by Julien Flatrès, julien_flatres AT yahoo.fr)
+- Added a complete graph for the PageSpeed Module.
+	(suggested by Jeroen Kik, monitorix AT steelyard.nl)
+- Added a complete graph for the 'upsc' (Network UPS Tools) command. [#95]
+- Added a complete graph for the ZFS filesystem.
+	(suggested by Kilian Cavalotti, kilian AT stanford.edu and others)
+- Changed the code in Wowza Server graph to treat MessagesInBytesRate and
+  MessagesOutBytesRate as gauge values. [#86]
+- Changed to a clickable link the bottom URL in the Apache graph, and fixed the
+  text color.
+- Changed to a clickable link the bottom URL in the Lighttpd graph, and fixed
+  the text color.
+- Changed to a clickable link the bottom URL in the PHP APC graph, and fixed
+  the text color.
+- Added custom url config option 'logo_top_url' for the top logo link. [#90]
+- Added support for postfix-policyd-spf-perl SPF handler in Mail graph.
+	(thanks to Claude Nadon, claude AT ws01.info)
+- Added support for process names that include spaces in Process graph. [#94]
+- Added the ability to include an alert for each defined filesystem in the 'fs'
+  graph. The previous unique alert system in this graph is now deprecated.
+- Improved the Apache graph adding more statistical values and graphs.
+	(suggested by Marco Reale, mlist AT libero.it)
+- Added Varnish 4 compatibility (partial). [#98]
+- Added support of Basic Authentication to Wowza graph. [#100]
+- Added alert capabilities to Apache graph based on the remaining free slots.
+	(suggested by Marco Reale, mlist AT libero.it)
+- Added the new option 'ipv6_disabled' (default: no) to disable IPv6 monitoring.
+- Fixed the text color in the bottom URL of the Bind graph.
+- Fixed the text color in the bottom URL of the Icecast Streaming Server graph.
+- Fixed a problem with multiple 'ApplicationInstance' tags in Wowza Server
+  graph. [#88]
+- Fixed the text color in the bottom URL of the Wowza graph.
+- Fixed to avoid results garbled when a defined Application is shutdown or if
+  multiple servers are defined in the Wowza graph. [#89]
+- Fixed a pair of incorrectly defined values in the 'system' graph that affected
+  the new RRDtool 1.5 branch with the message "Function update_pdp_prep, case
+  DST_GAUGE - Cannot convert '' to float". [#91]
+- Fixed a parsing error when using process names with the character colon.
+	(thanks to Harold Pena, haroldpena AT hotmail.com for pointing this out)
+- Fixed to put the output of the 'addendum_script' at the bottom of the email,
+  and to avoid being repeated on each graph in the 'emailreports' graph.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz)
+- Fixed a wrong example in the documentation when showing how to define the same
+  port number using IPv4 and IPv6 in the 'port' graph.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz for pointing this out)
+- Fixed to not show the red background color in listening network ports using
+  IPv6 in the 'port' graph.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz for pointing this out)
+- Fixed to avoid checking 'iptables' version on BSD systems.
+- Fixed to use 'swapctl' instead of 'swapinfo' in OpenBSD.
+- Fixed to show the correct uptime in additional Wowza servers.
+- Fixed to remove the authentication information from the URLs shown in the
+  bottom of Wowza graphs.
+- Fixed a bug in the regexp of memory graph in OpenBSD.
+- Fixed to show hidden colors of some values in the Icecast graph. [#108]
+- Small cosmetic changes.
+
+
+3.7.0  - 12-Mar-2015
+====================
+- Added a complete statistical VerliHub (verlihub) graph. [#72]
+- Added a complete graph for Varnish proxy cache.
+	(suggested by Dan Criel, dancriel AT gmail.com)
+- Improved 'port' option documentation of the Nginx graph in the man page of
+  monitorix.conf.
+	(thanks to Claude Nadon, claude AT ws01.info)
+- Improved '<devmap>' option documentation of the FS graph in the man page of
+  monitorix.conf.
+	(thanks to Claude Nadon, claude AT ws01.info)
+- Improved the way how are detected the process names in Process.pm module. Now
+  the output of the 'command' parameter in the 'ps' command is used to match
+  the process names.
+	(suggested by Julien Flatrès, julien_flatres AT yahoo.fr)
+- Zoomed graphs now honour the 'global_zoom' option, and also use the function
+  RRDs::graphv to fit better in the browser pop up window. This is a feature
+  only visible with RRDtool v1.3 or more.
+	(suggested by Alexander Görtz, alex AT nyloc.de)
+- Added an advice in 'htpasswd.pl' and 'monitorix.conf(5)' to not use the
+  character colon ':' as part of the name or password since this character is
+  used as field separator.
+	(thanks to Dave Banthorpe, dave.banthorpe AT gmail.com for pointing this out)
+- Added support for IPv6 in 'ports' graph using protocols 'tcp6' and 'upd6'.
+  Note that 'ip6tables' command line is needed. [#67]
+- Port graph now uses the wait lock option ('--wait') in newer 'iptables'
+  versions. [#73]
+- Added Dutch translation to monthly reports.
+	(thanks to Jeroen Kik, monitorix AT steelyard.nl)
+- Removed the option 'all' as network protocol in the 'port' graph. [#67]
+- Fixed some bugs in the new Makefile. [#63]
+- Fixed more messages of use of uninitialized values at fs.pm in lines 765 and
+  766. This mainly happens in OpenVZ VPS where '/proc/diskstats' file does not
+  exist.
+- Fixed the example of '<devmap>' block in the monitorix.conf(5) man page to
+  avoid confusion. The values set there must be the same ones that in the
+  '/proc/diskstats' file.
+	(thanks to Claude Nadon, claude AT ws01.info for pointing this out)
+- Fixed kernel version detection in FreeBSD 10.x which affected the Network
+  graph.
+	(thanks to Sergey Andreyev, sandreyev AT gmail.com)
+- Fixed missing HTML tag terminations in several modules.
+- Fixed the color in the footer URLs in Multihost mode.
+- Fixed a '403 Forbidden' message in Apache generated by a misconfiguration in
+  'monitorix-apache.conf'. [#69]
+- Fixed a bug in 'netstat' module that prevented, in some cases, counting
+  correctly the opened connections either in IPv4 and IPv6. [#66]
+- Fixed a missing CDEF that prevented creating the 'process05z.png' graph when
+  the option 'show_gaps' was enabled. [#70]
+- Fixed a bug in 'squid.pm' module that prevented from seeing values in the
+  network protocols usage graph.
+	(thanks to Claude Andriampanala, claude AT 2mi.mg for pointing this out)
+- Fixes a character shifted to the left in certain 'hplog' outputs. [#78]
+- Fixed the 'process' graph in Multihost mode.
+	(thanks to Jeff Hendricks, jeffrey_hendricks AT hotmail.com for pointing this out)
+- Fixed the 'Makefile' to install 'docs/debian.conf' as 'conf.d/00-debian.conf'.
+  [#79]
+- Fixed to remove red background color in 'port' graph when the network port is
+  for outgoing connections.
+- Fixed a typo in the y axis title on 'apcupsd' Time left graph. [#82]
+- Fixed to increase the timeout in 'emailreports' from 30 to 120 seconds.
+- Small cosmetic changes.
+
+
+3.6.0  - 20-Aug-2014
+====================
+- Added a complete statistical Libvirt (libvirt) graph.
+- Added a complete processes statistics (process) graph.
+- Added Upstart job. [#46]
+- Added more verbosity during the startup.
+- Added support to include username and password in the 'url_prefix' option of
+  the 'emailreports' module.
+	(suggested by V1ru535, admin AT mynet.fr)
+- Optimized the 'serv' graph to not overload servers with big log files.
+- Added support to include Piwik tracking code.
+	(suggested by V1ru535, admin AT mynet.fr)
+- Added support for relay-only MTA (for example Nullmailer) in 'emailreports'.
+  [#49]
+- Added the new option 'ip_default_table' to define in which table Monitorix
+  will put all iptables rules for network traffic accounting monitoring.
+	(suggested by Russell Morris, rmorris AT rkmorris.us)
+- Added SPF statistics in the 'mail' graph.
+- Added support for newest NVidia driver 340.24. [#54]
+- Added the new 'url_prefix_proxy' option to bypass the URL building in the CGI.
+  Usefull when Monitorix is used behind a reverse proxy. [#58]
+- Added a 'Makefile' to provide more flexibility for users and packagers. [#62]
+- Improved in all graphs the 'limit' and 'rigid' functionality and reduced a lot
+  of redundant code.
+- Changed all DST from COUNTER to GAUGE in 'net' module to avoid unexpected huge
+  peaks.
+- Added a check to detect inconsistencies between enabled graphs and defined
+  graphs during initialization.
+- Fixed regexp that prevented collecting LOADPCT and ITEMP values in 'apcupsd'
+  module.
+	(thanks to Patrick Fallberg, patrick AT fallberg.net)
+- Fixed to show the filesystem name when Monitorix is unable to detect its
+  device name.
+- Fixed messages of argument isn't numeric in addition at fs.pm in lines 650 and
+  684. This happened if one of the filesystems defined is not a real mount
+  point with an associated device name.
+	(thanks to Andreas Itzchak Rehberg, izzy AT qumran.org for pointing this out)
+- Fixed the values in the text interface of the 'fs' graph.
+- Fixed init script to work with Chef properly. [#48]
+- Fixed a line that forced updates on every minute in the 'serv' graph.
+- Fixed 'icecast' graph to support newer statistics page format.
+- Fixed the use of uninitialized variables in 'phpapc' module.
+- Fixed to correctly sanitize the comma-separated values in the 'list' option of
+  the 'mysql' module.
+- Fixed the built-in HTTP server to return a correct Content-Type header for
+  '.css' files.
+	(thanks to Liang Zhang, liangz AT fnal.gov for pointing this out)
+- Small fixes and typos.
+
+
+3.5.1  - 06-May-2014
+====================
+- Added proper permission parameters depending on Apache version in the Apache
+  configuration file 'docs/monitorix-apache.conf'. <https://bugzilla.redhat.com/show_bug.cgi?id=1062202>
+- Added more error-verbosity when initializing modules.
+- Added an extra configuration file specific for Debian systems. That file is
+  expected to be placed in conf.d/ directory.
+	(thanks to Andreas Itzchak Rehberg, izzy AT qumran.org)
+- Added a new command line argument '-n' to prevent Monitorix from daemonizing
+  and force it to run in the foreground. This is specially useful in debugging
+  mode.
+- Fixed the error message 'ERROR: line 1237: expected </row> element but found <v>' when upgrading to 3.5.0 version.
+- Fixed to default to white color theme if 'theme_color' option is invalid or
+  not defined.
+- Fixed to merge correctly the main configuration file with any extra
+  configuration files in conf.d/ directory.
+- Fixed a bug in the naming scheme of the graphs on multiple lists in the 'fs'
+  module.
+	(thanks to Monitar, monitarisso AT sapo.pt for pointing this out)
+- Fixed a bug in the 'fs' module that could kill Monitorix itself if open()
+  couldn't fork(). This only should happen in rare situations.
+- Fix a bug that affected the 'emailreports' module, which was sending emails
+  with no graphs.
+	(thanks to Patrick Fallberg, patrick AT fallberg.net for pointing this out)
+	(thanks to Sam, yst.guy.tw AT gmail.com for pointing this out)
+- Small fixes and typos.
+
+
+3.5.0  - 24-Mar-2014
+====================
+- Added a complete statistical APC UPS (apcupsd) graph.
+	(thanks to Ilya Karpov, gibzer AT gmail.com)
+- Added a complete statistical Netstat (netstat) graph.
+	(suggested by Maarten van Lieshout, mlieshout AT cocomowebbeheer.nl)
+- Added support for amavisd-new in the 'serv' and 'mail' graphs for spam and
+  virus email accounting.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz)
+- Added support for PHP APC 4.0. [#36]
+- Added an error message into the email if 'emailreports' can't connect with
+  Monitorix.
+- Added the new 'addendum_script' option in the 'emailreports' in order to
+  include user's own data in the emails.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz)
+- Added support to use '/dev/disk/by-path/' paths as device names in the 'disk'
+  graph. [#37]
+- Added two new options in 'emailreports' to configure the time when email
+  reports will be sent. [#39]
+- Added a new option to accept self-signed certificates when collecting values
+  remotely using HTTPS protocol. [#40]
+- Added support in the 'port' graph to define multiple network protocols on the
+  same port number.
+	(thanks by Jean-Louis Halleux, monitorix AT ritm.be)
+- Added the inode usage in the 'fs' graph and refactored the layout.
+	(suggested by Andreas Itzchak Rehberg, izzy AT qumran.org)
+- Added a new option called 'include_dir' to be able to load additional
+  configuration files from a specific directory ('/etc/monitorix/conf.d' by
+  default). As a result of this, the main configuration file is now located
+  into the new directory '/etc/monitorix/'.
+- Added the option 'url' in the 'nginx' graph to define a full URL to be used
+  to collect stats.
+	(suggested by Melkor, morgoth AT free.fr)
+- Changed the default path '/usr/share/monitorix' of the 'base_dir' option to
+  '/var/lib/monitorix/www'. This should make Monitorix more FHS friendly.
+- Incremented the font size of the titles in the 'bind' graph.
+- Removed the hard coded suffix '/server-status?auto' from the 'apache' and
+  'lighttpd' modules, now it most be part of the URL(s) defined in the 'list'
+  option.
+	(suggested by Melkor, morgoth AT free.fr)
+- Removed the EOL mark in the regexp of the 'milter-greylist' stats in order to
+  support newer version 4.4.3.
+  	(thanks to Sean Wilson, monitorix AT bsdpanic.com)
+- Fixed to expand gaps also for negative values. [#34]
+- Fixed in email reports to show all graphs in the list. [#33]
+- Fixed the date format to match with UW-IMAP logs and also add POP3 login
+  accounting.
+  	(thanks to Wijatmoko U. Prayitno, koko AT crypto.my.id for pointing this out)
+- Fixed to show the text interface in the 'memcached' graph.
+- Fixed to initialize a pair of variables in 'mail.pm' in order to avoid
+  'Use of uninitialized value...' messages in log file.
+	(thanks to Dirk Tanneberger, os AT tanneberger.biz)
+- Fixed to avoid unexpected grouping of network interfaces with aliases in the
+  'net' graph.
+	(thanks to Ivo Brhel, ivb AT volny.cz)
+- Fixed to enclose URLs with single quotes in the Multihost HTML.
+- Fixed messages of 'use of uninitialized values' and 'non-numeric arguments in
+  addition' in 'proc' and 'fs' graphs respectively on FreeBSD systems.
+	(thanks to Janusz Pruszewicz, janusz AT pruszewicz.com)
+- Fixed to match exactly the connection types 'in', 'out' or 'in/out' in 'port'
+  graph.
+- Fixed to compare kernel versions as strings instead as numbers and improved
+  the way how is extracted the kernel version.
+	(thanks to Jean-Louis Halleux, monitorix AT ritm.be)
+- Fixed some HTML tags in 'monitorix.cgi'.
+- Fixed a missing HTML tag in 'port' graph.
+	(thanks to Jean-Louis Halleux, monitorix AT ritm.be)
+- Fixed messages of 'use of uninitialized value' in 'port' graph.
+	(thanks to Claude Nadon, claude AT ws01.info for pointing this out)
+- Fixed the title of certain graphs in Multihost mode.
+- Small fixes and typos.
+
+
+3.4.0  - 02-Dec-2013
+====================
+- Added a complete statistical Memcached graph. [#27]
+- Added support for different BIND stats versions (2 and 3 right now).
+	(thanks to Ivo Brhel, ivb AT volny.cz)
+- Added two new alerts in the 'disk' graph in order to know if a disk drive has
+  exceeded or reached a threshold for reallocated and pending sectors.
+	(suggested by Matthew Connelly, maff AT maff.im)
+- Added a new option called 'max_historic_years' (with a default value of 1),
+  which enables the ability to have up to 5 years of data. Beware with this
+  option because it generates a new '.rrd' file every time the value is
+  extended, losing the current historical data.
+	(suggested by Mohan Reddy, Mohan.Reddy AT analog.com)
+- Improved the regexp when collecting data from devices's interrupts which also
+  fixes some annoying messages on using non-numeric arguments.
+- Added support for the Pure-FTPd logs in the 'serv' and 'ftp' graphs.
+- Added the new configuration option 'https_url'. [#31]
+- Fixed error messages about use of uninitialized values in 'system' graph on
+  BSD systems.
+- Fixed error messages about not numeric argument in addition in 'fs' graph on
+  BSD systems.
+- Fixed in 'emailreports' to use the command line 'hostname' if the variable
+  $ENV{HOSTNAME} is not defined (Debian/Ubuntu and perhaps other systems).
+	(thanks to Skibbi, skibbi AT gmail.com for pointing this out)
+- Fixed the error message 'String ends after the = sign on CDEF:allvalues=' in
+  the 'int' graph (the Interrupts graph is pending to have a complete rewrite).
+- Fixed the 'int' graph in order to be more compatible with Raspberry Pi.
+- Fixed in 'bind.pm' to store a 0 value if threads are disabled. [#29]
+- Fixed to correctly sent images in graphs 'proc', 'port' and 'fail2ban' when
+  using emailreports.
+	(thanks to Bénoît Segond von Banchet,
+	bjm.segondvonbanchet AT telfort.nl for pointing this out)
+- Fixed to show the real hostname in the emailreports.
+- Fixed the 'int' graph in order to be compatible with Excito B3 product.
+	(thanks to Patrick Fallberg, patrick AT fallberg.net for pointing this out)
+- Fixed to correctly sanitize the input string in the built-in HTTP server
+  which led into a number of security vulnerabilities. [#30]
+- Fixed the lack of minimum definition in some data sources of 'bind' graph.
+	(thanks to Andreas Itzchak Rehberg, izzy AT qumran.org for pointing this out)
+- Fixed a fail to adequately sanitize request strings of malicious JavaScript.
+  [#30]
+	(thanks to Jacob Amey, jamey AT securityinspection.com for pointing this out)
+- Fixed a typo in monitorix.service. [#32]
+- Fixed the requests value in the 'nginx' graph. Now it honours the label to
+  show the value per second, instead of per minute.
+	(thanks to Martin Culak, culak AT firma.azet.sk for pointing this out)
+- Small fixes and typos.
+
+
+3.3.1  - 21-Nov-2013
+====================
+- Fixed to correctly sanitize the input string in the built-in HTTP server
+  which led a number of security vulnerabilities. [#30]
+
+
+3.3.0  - 12-Aug-2013
+====================
+- Added a complete statistical Wowza Media Server graph.
+	(suggested by Daniele Ilardo, kkstyle21 AT gmail.com)
+- Added a complete statistical PHP-APC graph.
+	(suggested by Petr Švec, petr.svec AT pak.izscr.cz)
+- Reimplemented the alarm signal handler placing it inside the main loop in
+  order to be able to control the timeouts in the 'disk' graph (and others).
+  This should avoid a complete freeze if the network goes down when monitoring
+  NFS filesystems. [#10]
+- Reimplemented the 'theme' option.
+- Implemented a complete email reporting mechanism. [#11]
+- Added the label 'Total' in the main graph of 'apache'.
+- Added a new option called 'show_gaps' to be able to see the gaps produced by
+  missing data in graphs.
+	(suggested by Skibbi, skibbi AT gmail.com)
+- Add a check during the initialization of the 'nvidia' graph, to test for the
+  existence of the 'nvidia-smi' command.
+- Add a check during the initialization of the 'nfss' graph, to test if there
+  is the '/proc/net/rpc/nfsd' file.
+- Add a check during the initialization of the 'nfsc' graph, to test if there
+  is the '/proc/net/rpc/nfs' file.
+- Added the option 'url_prefix' in the 'traffacct' graph.
+- Added the option 'global_zoom' to all graphs.
+- Fixed a bug that prevented from seeing stats in the 'nfss' graph.
+- Fixed in 'nginx' graph the name of the iptables rules which prevented working
+  the network traffic graph. [#22]
+- Fixed a bug that prevented a correctly data collection in the 'fail2ban'
+  graph. [#23]
+- Fixed the description of 'netstats_in_bps' in monitorix.conf(5) man page.
+- Fixed a message of 'Argument "" isn't numeric in int ...' in 'nvidia' graph
+  when using newer official drivers.
+- Fixed a bug in Groups (Multihost view) that prevented from seeing the remote
+  server's graphs of the selected group.
+	(thanks to Mauro Medda, m.medda AT tiscali.it)
+- Little code cleaning.
+
+
+3.2.1  - 03-Jun-2013
+====================
+- Changed the source from where is collected the memory usage in the 'squid'
+  graph. Now the shown values are more real and accurate.
+- Added user/password authentication options in the built-in HTTP server. [#14]
+- Added the script 'htpasswd.pl' to be able to encrypt passwords. [#14]
+- Added the options 'hosts_allow' and 'hosts_deny' to restrict access by IP
+  address to the built-in HTTP server. [#14]
+- Added the ability to specify an optional host address for the built-in HTTP
+  server to bind to. [#19]
+- Added a new option in the 'disk' graph called 'accept_invalid_disk' that
+  permits continue working even if some of the device names defined are invalid
+  or non-existent. This is specially useful to monitor external disks that
+  aren't permanently connected to the system.
+- Updated the 'monitorix.service' file. [#20]
+	(thanks to Christopher Meng, rpm AT cicku.me)
+- Fixed a bug that prevented from seeing the Core temperatures in the 'lmsens'
+  graph.
+	(thanks to Bryan Guidroz, bryanguidroz AT hotmail.com)
+- Fixed a typo and escaped a pair of hyphens in the monitorix.conf(5) man page.
+
+
 3.2.0  - 13-May-2013
 ====================
 - Added a complete Raspberry Pi sensors graph. [#10, #13]

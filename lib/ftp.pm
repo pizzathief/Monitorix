@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -33,8 +33,39 @@ sub ftp_init {
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 
+	my $info;
+	my @rra;
+	my @tmp;
+	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	if(-e $rrd) {
+		$info = RRDs::info($rrd);
+		for my $key (keys %$info) {
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+	}
+
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		eval {
 			RRDs::create($rrd,
 				"--step=60",
@@ -61,19 +92,19 @@ sub ftp_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -116,7 +147,6 @@ sub ftp_update {
 	my $bytes_down = 0;
 	my $bytes_up = 0;
 
-	my @data;
 	my $rrdata = "N";
 
 	if(! -r $config->{ftp_log}) {
@@ -221,6 +251,43 @@ sub ftp_update {
 					}
 				}
 			}
+			if(lc($ftp->{server}) eq "pure-ftpd") {
+				my $date = strftime("%b %e", localtime);
+				if(/^$date /) {
+					if(/ \[NOTICE\] .*? downloaded  \((\d+) bytes,.*?/) {
+						$retr++;
+						$bytes_down += int($1);
+					}
+					if(/ \[NOTICE\] .*? uploaded  \((\d+) bytes,.*?/) {
+						$stor++;
+						$bytes_up += int($1);
+					}
+					if(/ \[DEBUG\] Command \[mkd\] /) {
+						$mkd++;
+					}
+					if(/ \[DEBUG\] Command \[rmd\] /) {
+						$rmd++;
+					}
+					if(/ \[DEBUG\] Command \[dele\] /) {
+						$dele++;
+					}
+					if(/ \[DEBUG\] Command (\[mlsd\]|\[list\]) /) {
+						$mlsd++;
+					}
+					if(/ \[INFO\] .*? is now logged in/) {
+						if(/ anon password /) {	# XXX
+							$anon_logins++;	# XXX
+							$logins++;	# XXX
+						} else {
+							$good_logins++;
+							$logins++;
+						}
+					}
+					if(/ \[WARNING\] Authentication failed for user /) {
+						$bad_logins++;
+					}
+				}
+			}
 		}
 		close(IN);
 	}
@@ -236,14 +303,25 @@ sub ftp_update {
 
 sub ftp_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $ftp = $config->{ftp};
-	my @rigid = split(',', $ftp->{rigid});
-	my @limit = split(',', $ftp->{limit});
+	my @rigid = split(',', ($ftp->{rigid} || ""));
+	my @limit = split(',', ($ftp->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
@@ -251,12 +329,16 @@ sub ftp_cgi {
 	my @riglim;
 	my @tmp;
 	my @tmpz;
+	my @CDEF;
 	my $n;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -265,19 +347,19 @@ sub ftp_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("Time    Dnloads Uploads  Mkdirs  Rmdirs Deletes Listing  Logins GLogins BLogins ALogins BytesDn BytesUp\n");
-		print("------------------------------------------------------------------------------------------------------- \n");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "Time    Dnloads Uploads  Mkdirs  Rmdirs Deletes Listing  Logins GLogins BLogins ALogins BytesDn BytesUp\n");
+		push(@output, "------------------------------------------------------------------------------------------------------- \n");
 		my $line;
 		my @row;
 		my $time;
@@ -297,16 +379,16 @@ sub ftp_cgi {
 				$bytes_down || 0,
 				$bytes_up || 0);
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc}    %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d\n", $time, @row);
+			push(@output, sprintf(" %2d$tf->{tc}    %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d\n", $time, @row));
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -321,87 +403,85 @@ sub ftp_cgi {
 		$u = "";
 	}
 
-	my $PNG1 = $u . $package . "1." . $tf->{when} . ".png";
-	my $PNG2 = $u . $package . "2." . $tf->{when} . ".png";
-	my $PNG3 = $u . $package . "3." . $tf->{when} . ".png";
-	my $PNG1z = $u . $package . "1z." . $tf->{when} . ".png";
-	my $PNG2z = $u . $package . "2z." . $tf->{when} . ".png";
-	my $PNG3z = $u . $package . "3z." . $tf->{when} . ".png";
-	unlink ("$PNG_DIR" . "$PNG1",
-		"$PNG_DIR" . "$PNG2",
-		"$PNG_DIR" . "$PNG3");
+	my $IMG1 = $u . $package . "1." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2 = $u . $package . "2." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3 = $u . $package . "3." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG1z = $u . $package . "1z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2z = $u . $package . "2z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3z = $u . $package . "3z." . $tf->{when} . ".$imgfmt_lc";
+	unlink ("$IMG_DIR" . "$IMG1",
+		"$IMG_DIR" . "$IMG2",
+		"$IMG_DIR" . "$IMG3");
 	if(lc($config->{enable_zoom}) eq "y") {
-		unlink ("$PNG_DIR" . "$PNG1z",
-			"$PNG_DIR" . "$PNG2z",
-			"$PNG_DIR" . "$PNG3z");
+		unlink ("$IMG_DIR" . "$IMG1z",
+			"$IMG_DIR" . "$IMG2z",
+			"$IMG_DIR" . "$IMG3z");
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
-	if(trim($rigid[0]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[0]));
-	} else {
-		if(trim($rigid[0]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
-	push(@tmp, "LINE1:retr#FFA500:Files downloaded (RETR)");
+	push(@tmp, "LINE2:retr#44EE44:Files downloaded (RETR)");
 	push(@tmp, "GPRINT:retr:LAST: Current\\: %3.0lf");
 	push(@tmp, "GPRINT:retr:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:retr:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:retr:MAX:   Max\\: %3.0lf\\n");
-	push(@tmp, "LINE1:stor#EEEE44:Files uploaded (STOR)");
+	push(@tmp, "LINE2:stor#4444EE:Files uploaded (STOR)");
 	push(@tmp, "GPRINT:stor:LAST:   Current\\: %3.0lf");
 	push(@tmp, "GPRINT:stor:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:stor:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:stor:MAX:   Max\\: %3.0lf\\n");
-	push(@tmp, "LINE1:mkd#EE4444:Dirs created (MKD)");
+	push(@tmp, "LINE2:mkd#EEEE44:Dirs created (MKD)");
 	push(@tmp, "GPRINT:mkd:LAST:      Current\\: %3.0lf");
 	push(@tmp, "GPRINT:mkd:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:mkd:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:mkd:MAX:   Max\\: %3.0lf\\n");
-	push(@tmp, "LINE1:rmd#44EE44:Dirs deleted (RMD)");
+	push(@tmp, "LINE2:rmd#EE4444:Dirs deleted (RMD)");
 	push(@tmp, "GPRINT:rmd:LAST:      Current\\: %3.0lf");
 	push(@tmp, "GPRINT:rmd:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:rmd:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:rmd:MAX:   Max\\: %3.0lf\\n");
-	push(@tmp, "LINE1:dele#EE44EE:Files deleted (DELE)");
+	push(@tmp, "LINE2:dele#EE44EE:Files deleted (DELE)");
 	push(@tmp, "GPRINT:dele:LAST:    Current\\: %3.0lf");
 	push(@tmp, "GPRINT:dele:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:dele:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:dele:MAX:   Max\\: %3.0lf\\n");
-	push(@tmp, "LINE1:mlsd#44EEEE:Dir listings (MLSD)");
+	push(@tmp, "LINE2:mlsd#44EEEE:Dir listings (MLSD)");
 	push(@tmp, "GPRINT:mlsd:LAST:     Current\\: %3.0lf");
 	push(@tmp, "GPRINT:mlsd:AVERAGE:   Average\\: %3.0lf");
 	push(@tmp, "GPRINT:mlsd:MIN:   Min\\: %3.0lf");
 	push(@tmp, "GPRINT:mlsd:MAX:   Max\\: %3.0lf\\n");
-	push(@tmpz, "LINE1:retr#FFA500:Files downloaded (RETR)");
-	push(@tmpz, "LINE1:stor#EEEE44:Files uploaded (STOR)");
-	push(@tmpz, "LINE1:mkd#EE4444:Dirs created (MKD)");
-	push(@tmpz, "LINE1:rmd#44EE44:Dirs deleted (RMD)");
-	push(@tmpz, "LINE1:dele#EE44EE:Files deleted (DELE)");
-	push(@tmpz, "LINE1:mlsd#44EEEE:Dir listings (MLSD)");
+	push(@tmpz, "LINE2:retr#44EE44:Files downloaded (RETR)");
+	push(@tmpz, "LINE2:stor#4444EE:Files uploaded (STOR)");
+	push(@tmpz, "LINE2:mkd#EEEE44:Dirs created (MKD)");
+	push(@tmpz, "LINE2:rmd#EE4444:Dirs deleted (RMD)");
+	push(@tmpz, "LINE2:dele#EE44EE:Files deleted (DELE)");
+	push(@tmpz, "LINE2:mlsd#44EEEE:Dir listings (MLSD)");
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
 		($width, $height) = split('x', $config->{graph_size}->{main}) if $silent eq "imagetagbig";
 		@tmp = @tmpz;
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG1",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG1",
 		"--title=$config->{graphs}->{_ftp1}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=Commands/s",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$colors->{graph_colors}},
 		"DEF:retr=$rrd:ftp_retr:AVERAGE",
@@ -410,21 +490,23 @@ sub ftp_cgi {
 		"DEF:rmd=$rrd:ftp_rmd:AVERAGE",
 		"DEF:dele=$rrd:ftp_dele:AVERAGE",
 		"DEF:mlsd=$rrd:ftp_mlsd:AVERAGE",
+		"CDEF:allvalues=retr,stor,mkd,rmd,dele,mlsd,+,+,+,+,+",
+		@CDEF,
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG1z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 			"--title=$config->{graphs}->{_ftp1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Commands/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:retr=$rrd:ftp_retr:AVERAGE",
@@ -433,38 +515,39 @@ sub ftp_cgi {
 			"DEF:rmd=$rrd:ftp_rmd:AVERAGE",
 			"DEF:dele=$rrd:ftp_dele:AVERAGE",
 			"DEF:mlsd=$rrd:ftp_mlsd:AVERAGE",
+			"CDEF:allvalues=retr,stor,mkd,rmd,dele,mlsd,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /ftp1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
-	undef(@riglim);
-	if(trim($rigid[1]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[1]));
-	} else {
-		if(trim($rigid[1]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[1]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	push(@tmp, "AREA:good_logins#44EEEE:Successful logins");
 	push(@tmp, "GPRINT:good_logins:LAST:     Current\\: %3.0lf\\n");
 	push(@tmp, "AREA:bad_logins#EE4444:Bad logins");
@@ -480,6 +563,11 @@ sub ftp_cgi {
 	push(@tmpz, "LINE2:good_logins#44EEEE");
 	push(@tmpz, "LINE2:bad_logins#EE4444");
 	push(@tmpz, "LINE2:anon_logins#EEEE44");
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -489,15 +577,15 @@ sub ftp_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG2",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG2",
 		"--title=$config->{graphs}->{_ftp2}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=Logins/s",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -505,20 +593,22 @@ sub ftp_cgi {
 		"DEF:good_logins=$rrd:ftp_good_logins:AVERAGE",
 		"DEF:bad_logins=$rrd:ftp_bad_logins:AVERAGE",
 		"DEF:anon_logins=$rrd:ftp_anon_logins:AVERAGE",
+		"CDEF:allvalues=logins,good_logins,bad_logins,anon_logins,+,+,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG2z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
 			"--title=$config->{graphs}->{_ftp2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Logins/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -526,34 +616,35 @@ sub ftp_cgi {
 			"DEF:good_logins=$rrd:ftp_good_logins:AVERAGE",
 			"DEF:bad_logins=$rrd:ftp_bad_logins:AVERAGE",
 			"DEF:anon_logins=$rrd:ftp_anon_logins:AVERAGE",
+			"CDEF:allvalues=logins,good_logins,bad_logins,anon_logins,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /ftp2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
-	undef(@riglim);
-	if(trim($rigid[2]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[2]));
-	} else {
-		if(trim($rigid[2]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[2]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[2], $limit[2])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	push(@tmp, "AREA:B_up#44EE44:Upload");
 	push(@tmp, "AREA:B_dn#4444EE:Download");
 	push(@tmp, "AREA:B_dn#4444EE:");
@@ -566,6 +657,11 @@ sub ftp_cgi {
 	push(@tmpz, "AREA:B_up#44EE44:");
 	push(@tmpz, "LINE1:B_dn#0000EE");
 	push(@tmpz, "LINE1:B_up#00EE00");
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -575,63 +671,73 @@ sub ftp_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG3",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG3",
 		"--title=$config->{graphs}->{_ftp3}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=bytes/s",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
 		"DEF:B_dn=$rrd:ftp_bytes_dn:AVERAGE",
 		"DEF:B_up=$rrd:ftp_bytes_up:AVERAGE",
+		"CDEF:allvalues=B_dn,B_up,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG3z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
 			"--title=$config->{graphs}->{_ftp3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=bytes/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:B_dn=$rrd:ftp_bytes_dn:AVERAGE",
 			"DEF:B_up=$rrd:ftp_bytes_up:AVERAGE",
+			"CDEF:allvalues=B_dn,B_up,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /ftp3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -35,8 +35,14 @@ sub proc_init {
 
 	my $info;
 	my @ds;
+	my @rra;
 	my @tmp;
 	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
 
 	if(!grep {$_ eq $config->{os}} ("Linux", "FreeBSD")) {
 		logger("$myself is not supported yet by your operating system ($config->{os}).");
@@ -51,15 +57,30 @@ sub proc_init {
 					push(@ds, substr($key, 3, index($key, ']') - 3));
 				}
 			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
 		}
 		if(scalar(@ds) / 9 != $proc->{max}) {
-			logger("Detected size mismatch between 'max = $proc->{max}' and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+			logger("$myself: Detected size mismatch between 'max = $proc->{max}' and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		for($n = 0; $n < $proc->{max}; $n++) {
 			push(@tmp, "DS:proc" . $n . "_user:GAUGE:120:0:100");
 			push(@tmp, "DS:proc" . $n . "_nice:GAUGE:120:0:100");
@@ -78,19 +99,19 @@ sub proc_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -159,7 +180,8 @@ sub proc_update {
 		my @data = split(' ', <IN>);
 		close(IN);
 		chomp($ncpu);
-		for($n = 0; $n < $proc->{max}; $n++) {
+		$ncpu = min($ncpu, $proc->{max});
+		for($n = 0; $n < $ncpu; $n++) {
 			$str = "cpu" . $n;
 			$from = $n * 5;
 			$to = $from + 4;
@@ -222,24 +244,36 @@ sub proc_update {
 
 sub proc_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $proc = $config->{proc};
 	my $kern = $config->{kern};
-	my @rigid = split(',', $proc->{rigid});
-	my @limit = split(',', $proc->{limit});
+	my @rigid = split(',', ($proc->{rigid} || ""));
+	my @limit = split(',', ($proc->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
 	my @riglim;
-	my @PNG;
-	my @PNGz;
+	my @IMG;
+	my @IMGz;
 	my @tmp;
 	my @tmpz;
+	my @CDEF;
 	my $vlabel;
 	my $ncpu;
 	my $n;
@@ -247,14 +281,17 @@ sub proc_cgi {
 	my $str;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
 	if($config->{os} eq "Linux") {
-		$ncpu = `grep -w processor /proc/cpuinfo | tail -1 | awk '{ print \$3 }'`;
+		$ncpu = `grep -e '^processor[[:space:]]*: [0-9]*' /proc/cpuinfo | tail -1 | awk '{ print \$3 }'`;
 		chomp($ncpu);
 		$ncpu++;
 	} elsif($config->{os} eq "FreeBSD") {
@@ -269,29 +306,29 @@ sub proc_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		for($n = 0; $n < $ncpu; $n++) {
-			print("       Processor " . sprintf("%3d", $n) . "                                   ");
+			push(@output, "       Processor " . sprintf("%3d", $n) . "                                   ");
 		}
-		print("\nTime");
+		push(@output, "\nTime");
 		for($n = 0; $n < $ncpu; $n++) {
-			print("   User  Nice   Sys  Idle  I/Ow   IRQ  sIRQ Steal Guest");
+			push(@output, "   User  Nice   Sys  Idle  I/Ow   IRQ  sIRQ Steal Guest");
 		}
-		print(" \n----");
+		push(@output, " \n----");
 		for($n = 0; $n < $ncpu; $n++) {
-			print("-------------------------------------------------------");
+			push(@output, "-------------------------------------------------------");
 		}
-		print(" \n");
+		push(@output, " \n");
 		my $line;
 		my @row;
 		my $time;
@@ -300,24 +337,24 @@ sub proc_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			for($n2 = 0; $n2 < $ncpu; $n2++) {
 				$from = $n2 * $ncpu;
 				$to = $from + $ncpu;
 				my ($usr, $nic, $sys, $idle, $iow, $irq, $sirq, $steal, $guest,) = @$line[$from..$to];
 				@row = ($usr, $nic, $sys, $idle, $iow, $irq, $sirq, $steal, $guest);
-				printf(" %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% ", @row);
+				push(@output, sprintf(" %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% %4.1f%% ", @row));
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -333,39 +370,33 @@ sub proc_cgi {
 	}
 
 	for($n = 0; $n < $ncpu; $n++) {
-		$str = $u . $package . $n . "." . $tf->{when} . ".png";
-		push(@PNG, $str);
-		unlink("$PNG_DIR" . $str);
+		$str = $u . $package . $n . "." . $tf->{when} . ".$imgfmt_lc";
+		push(@IMG, $str);
+		unlink("$IMG_DIR" . $str);
 		if(lc($config->{enable_zoom}) eq "y") {
-			$str = $u . $package . $n . "z." . $tf->{when} . ".png";
-			push(@PNGz, $str);
-			unlink("$PNG_DIR" . $str);
+			$str = $u . $package . $n . "z." . $tf->{when} . ".$imgfmt_lc";
+			push(@IMGz, $str);
+			unlink("$IMG_DIR" . $str);
 		}
 	}
 
-	if(trim($rigid[0]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[0]));
-	} else {
-		if(trim($rigid[0]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	$n = 0;
 	while($n < $ncpu) {
 		if($title) {
 			if($n == 0) {
-				main::graph_header($title, $proc->{graphs_per_row});
+				push(@output, main::graph_header($title, $proc->{graphs_per_row}));
 			}
-			print("    <tr>\n");
+			push(@output, "    <tr>\n");
 		}
 		for($n2 = 0; $n2 < $proc->{graphs_per_row}; $n2++) {
 			last unless $n < $ncpu;
 			if($title) {
-				print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
 			undef(@tmp);
 			undef(@tmpz);
+			undef(@CDEF);
 			if(lc($kern->{graph_mode}) eq "r") {
 				$vlabel = "Percent (%)";
 				if(lc($kern->{list}->{user}) eq "y") {
@@ -577,16 +608,22 @@ sub proc_cgi {
 				push(@tmp, "LINE1:user#0000EE");
 				push(@tmpz, "LINE1:user#0000EE");
 			}
+			if(lc($config->{show_gaps}) eq "y") {
+				push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+				push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+				push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+			}
+
 			($width, $height) = split('x', $config->{graph_size}->{$proc->{size}});
-			RRDs::graph("$PNG_DIR" . "$PNG[$n]",
+			$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$n]",
 				"--title=$config->{graphs}->{_proc} $n  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
@@ -598,20 +635,22 @@ sub proc_cgi {
 				"DEF:sirq=$rrd:proc" . $n . "_sirq:AVERAGE",
 				"DEF:steal=$rrd:proc" . $n . "_steal:AVERAGE",
 				"DEF:guest=$rrd:proc" . $n . "_guest:AVERAGE",
+				"CDEF:allvalues=user,nice,sys,iow,irq,sirq,steal,guest,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmp);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNG[$n]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$n]: $err\n") if $err;
 			if(lc($config->{enable_zoom}) eq "y") {
 				($width, $height) = split('x', $config->{graph_size}->{zoom});
-				RRDs::graph("$PNG_DIR" . "$PNGz[$n]",
+				$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$n]",
 					"--title=$config->{graphs}->{_proc} $n  ($tf->{nwhen}$tf->{twhen})",
 					"--start=-$tf->{nwhen}$tf->{twhen}",
-					"--imgformat=PNG",
+					"--imgformat=$imgfmt_uc",
 					"--vertical-label=$vlabel",
 					"--width=$width",
 					"--height=$height",
 					@riglim,
-					"--lower-limit=0",
+					$zoom,
 					@{$cgi->{version12}},
 					@{$cgi->{version12_small}},
 					@{$colors->{graph_colors}},
@@ -623,36 +662,44 @@ sub proc_cgi {
 					"DEF:sirq=$rrd:proc" . $n . "_sirq:AVERAGE",
 					"DEF:steal=$rrd:proc" . $n . "_steal:AVERAGE",
 					"DEF:guest=$rrd:proc" . $n . "_guest:AVERAGE",
+					"CDEF:allvalues=user,nice,sys,iow,irq,sirq,steal,guest,+,+,+,+,+,+,+",
+					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
-				print("ERROR: while graphing $PNG_DIR" . "$PNGz[$n]: $err\n") if $err;
+				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
 			}
 			if($title || ($silent =~ /imagetag/ && $graph =~ /proc$n/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
-					}
-					else {
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
+					} else {
+						if($version eq "new") {
+							$picz_width = $picz->{image_width} * $config->{global_zoom};
+							$picz_height = $picz->{image_height} * $config->{global_zoom};
+						} else {
+							$picz_width = $width + 115;
+							$picz_height = $height + 100;
+						}
+						push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "'>\n");
+					push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "'>\n");
 				}
 			}
 			if($title) {
-				print("    </td>\n");
+				push(@output, "    </td>\n");
 			}
 			$n++;
 		}
 		if($title) {
-			print("    </tr>\n");
+			push(@output, "    </tr>\n");
 		}
 	}
 	if($title) {
-		main::graph_footer();
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

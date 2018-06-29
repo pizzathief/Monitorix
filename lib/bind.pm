@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -37,8 +37,14 @@ sub bind_init {
 
 	my $info;
 	my @ds;
+	my @rra;
 	my @tmp;
 	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
 
 	if(-e $rrd) {
 		$info = RRDs::info($rrd);
@@ -48,22 +54,37 @@ sub bind_init {
 					push(@ds, substr($key, 3, index($key, ']') - 3));
 				}
 			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
 		}
 		if(scalar(@ds) / 135 != scalar(my @bl = split(',', $bind->{list}))) {
-			logger("Detected size mismatch between 'list' (" . scalar(my @bl = split(',', $bind->{list})) . ") and $rrd (" . scalar(@ds) / 135 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+			logger("$myself: Detected size mismatch between 'list' (" . scalar(my @bl = split(',', $bind->{list})) . ") and $rrd (" . scalar(@ds) / 135 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		for($n = 0; $n < scalar(my @bl = split(',', $bind->{list})); $n++) {
-			push(@tmp, "DS:bind" . $n . "_totalinq:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_inq01:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_inq02:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_inq03:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_inq04:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_inq05:GAUGE:120:U:U");
+			push(@tmp, "DS:bind" . $n . "_totalinq:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_inq01:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_inq02:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_inq03:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_inq04:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_inq05:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_inq06:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_inq07:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_inq08:GAUGE:120:0:U");
@@ -79,11 +100,11 @@ sub bind_init {
 			push(@tmp, "DS:bind" . $n . "_inq18:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_inq19:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_inq20:GAUGE:120:0:U");
-			push(@tmp, "DS:bind" . $n . "_ouq01:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_ouq02:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_ouq03:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_ouq04:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_ouq05:GAUGE:120:U:U");
+			push(@tmp, "DS:bind" . $n . "_ouq01:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_ouq02:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_ouq03:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_ouq04:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_ouq05:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_ouq06:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_ouq07:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_ouq08:GAUGE:120:0:U");
@@ -139,11 +160,11 @@ sub bind_init {
 			push(@tmp, "DS:bind" . $n . "_rs18:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_rs19:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_rs20:GAUGE:120:0:U");
-			push(@tmp, "DS:bind" . $n . "_crr01:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_crr02:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_crr03:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_crr04:GAUGE:120:U:U");
-			push(@tmp, "DS:bind" . $n . "_crr05:GAUGE:120:U:U");
+			push(@tmp, "DS:bind" . $n . "_crr01:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_crr02:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_crr03:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_crr04:GAUGE:120:0:U");
+			push(@tmp, "DS:bind" . $n . "_crr05:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_crr06:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_crr07:GAUGE:120:0:U");
 			push(@tmp, "DS:bind" . $n . "_crr08:GAUGE:120:0:U");
@@ -201,19 +222,19 @@ sub bind_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -227,6 +248,28 @@ sub bind_init {
 			}
 			return;
 		}
+	}
+
+	# this fixes the lack of minimum definition in some data sources
+	for($n = 0; $n < scalar(my @bl = split(',', $bind->{list})); $n++) {
+		RRDs::tune($rrd,
+			"--minimum=bind" . $n . "_totalinq:0",
+			"--minimum=bind" . $n . "_inq01:0",
+			"--minimum=bind" . $n . "_inq02:0",
+			"--minimum=bind" . $n . "_inq03:0",
+			"--minimum=bind" . $n . "_inq04:0",
+			"--minimum=bind" . $n . "_inq05:0",
+			"--minimum=bind" . $n . "_ouq01:0",
+			"--minimum=bind" . $n . "_ouq02:0",
+			"--minimum=bind" . $n . "_ouq03:0",
+			"--minimum=bind" . $n . "_ouq04:0",
+			"--minimum=bind" . $n . "_ouq05:0",
+			"--minimum=bind" . $n . "_crr01:0",
+			"--minimum=bind" . $n . "_crr02:0",
+			"--minimum=bind" . $n . "_crr03:0",
+			"--minimum=bind" . $n . "_crr04:0",
+			"--minimum=bind" . $n . "_crr05:0",
+		);
 	}
 
 	$config->{bind_hist} = ();
@@ -254,12 +297,37 @@ sub bind_update {
 
 	for($n = 0; $n < scalar(my @bl = split(',', $bind->{list})); $n++) {
 		my $l = trim($bl[$n]);
-		my $ua = LWP::UserAgent->new(timeout => 30);
+		my $ssl = "";
+
+		$ssl = "ssl_opts => {verify_hostname => 0}"
+			if lc($config->{accept_selfsigned_certs}) eq "y";
+
+		my $ua = LWP::UserAgent->new(timeout => 30, $ssl);
+		$ua->agent($config->{user_agent_id}) if $config->{user_agent_id} || "";
 		my $response = $ua->request(HTTP::Request->new('GET', $l));
 		my $data = XMLin($response->content);
 		my $value;
 
-		$value = $data->{bind}->{statistics}->{server}->{requests}->{opcode}->{counter};
+		# BIND v9.9+ has different statistics layout than BIND v9.5+.
+		# we attempt first to get stats from a BIND v9.5+
+		if(!($value = $data->{bind}->{statistics}->{version})) {
+			# otherwise attempt it on a BIND v9.9+
+			$value = $data->{version};
+		}
+		my ($major, $minor) = split('\.', $value);
+		$minor =~ m/^(\d+)/;
+		if(!grep {$_ eq $major} ("2", "3")) {
+			my $version = $major . "." . $minor;
+			logger("$myself: BIND stats version '$version' unsupported.");
+		}
+
+
+		if($major eq "2") {
+			$value = $data->{bind}->{statistics}->{server}->{requests}->{opcode}->{counter};
+		}
+		if($major eq "3") {
+			$value = $data->{server}->{counters}->[0]->{counter}->{QUERY}->{content};
+		}
 		$str = $n . "totalinq";
 		$value = $value || 0;
 		$totalinq = $value - ($config->{bind_hist}->{$str} || 0);
@@ -267,48 +335,120 @@ sub bind_update {
 		$totalinq /= 60;
 		$config->{bind_hist}->{$str} = $value;
 
-		$value = $data->{bind}->{statistics}->{server}->{'queries-in'}->{rdtype};
-		foreach(keys %{$value}) {
-			$str = $n . "inq_$_";
-			$inq{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
-			$inq{$str} = 0 unless $inq{$str} != $value->{$_}->{counter};
-			$inq{$str} /= 60;
-			$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+
+		if($major eq "2") {
+			$value = $data->{bind}->{statistics}->{server}->{'queries-in'}->{rdtype};
+
+			# converts BIND's output when there is only one hit
+			if($value->{name}) {
+				my $name = $value->{name};
+				my $counter = $value->{counter};
+
+				delete($value->{name});
+				delete($value->{counter});
+				$value->{$name}->{'counter'} = $counter;
+			}
+
+			foreach(keys %{$value}) {
+				$str = $n . "inq_$_";
+				$inq{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
+				$inq{$str} = 0 unless $inq{$str} != $value->{$_}->{counter};
+				$inq{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+			}
+		}
+		if($major eq "3") {
+			$value = $data->{server}->{counters}->[1]->{counter} ;
+			foreach(keys %{$value}) {
+				$str = $n . "inq_$_";
+				$inq{$str} = $value->{$_}->{content} - ($config->{bind_hist}->{$str} || 0);
+				$inq{$str} = 0 unless $inq{$str} != $value->{$_}->{content};
+				$inq{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{content};
+			}
 		}
 
-		my $views_default = $data->{bind}->{statistics}->{views}->{view}->{_default};
-		$value = $views_default->{rdtype};
-		foreach(keys %{$value}) {
-			$str = $n . "ouq_$_";
-			$ouq{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
-			$ouq{$str} = 0 unless $ouq{$str} != $value->{$_}->{counter};
-			$ouq{$str} /= 60;
-			$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+
+		my $views_default;
+		if($major eq "2") {
+			$views_default = $data->{bind}->{statistics}->{views}->{view}->{_default};
+			$value = $views_default->{rdtype};
+			foreach(keys %{$value}) {
+				$str = $n . "ouq_$_";
+				$ouq{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
+				$ouq{$str} = 0 unless $ouq{$str} != $value->{$_}->{counter};
+				$ouq{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+			}
+		}
+		if($major eq "3") {
+			$views_default = $data->{views}->{view}->{_default}->{counters};
+			$value = $views_default->[0]->{counter};
+			foreach(keys %{$value}) {
+				$str = $n . "ouq_$_";
+				$ouq{$str} = $value->{$_}->{content} - ($config->{bind_hist}->{$str} || 0);
+				$ouq{$str} = 0 unless $ouq{$str} != $value->{$_}->{content};
+				$ouq{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{content};
+			}
 		}
 
-		$value = $data->{bind}->{statistics}->{server}->{nsstat};
-		foreach(keys %{$value}) {
-			$str = $n . "ss_$_";
-			$ss{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
-			$ss{$str} = 0 unless $ss{$str} != $value->{$_}->{counter};
-			$ss{$str} /= 60;
-			$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+
+		if($major eq "2") {
+			$value = $data->{bind}->{statistics}->{server}->{nsstat};
+			foreach(keys %{$value}) {
+				$str = $n . "ss_$_";
+				$ss{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
+				$ss{$str} = 0 unless $ss{$str} != $value->{$_}->{counter};
+				$ss{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+			}
+		}
+		if($major eq "3") {
+			$value = $data->{server}->{counters}->[2]->{counter};
+			foreach(keys %{$value}) {
+				$str = $n . "ss_$_";
+				$ss{$str} = $value->{$_}->{content} - ($config->{bind_hist}->{$str} || 0);
+				$ss{$str} = 0 unless $ss{$str} != $value->{$_}->{content};
+				$ss{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{content};
+			}
 		}
 
-		$value = $views_default->{resstat};
-		foreach(keys %{$value}) {
-			$str = $n . "rs_$_";
-			$rs{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
-			$rs{$str} = 0 unless $rs{$str} != $value->{$_}->{counter};
-			$rs{$str} /= 60;
-			$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+
+		if($major eq "2") {
+			$value = $views_default->{resstat};
+			foreach(keys %{$value}) {
+				$str = $n . "rs_$_";
+				$rs{$str} = $value->{$_}->{counter} - ($config->{bind_hist}->{$str} || 0);
+				$rs{$str} = 0 unless $rs{$str} != $value->{$_}->{counter};
+				$rs{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{counter};
+			}
+		}
+		if($major eq "3") {
+			$value = $views_default->[1]->{counter};
+			foreach(keys %{$value}) {
+				$str = $n . "rs_$_";
+				$rs{$str} = $value->{$_}->{content} - ($config->{bind_hist}->{$str} || 0);
+				$rs{$str} = 0 unless $rs{$str} != $value->{$_}->{content};
+				$rs{$str} /= 60;
+				$config->{bind_hist}->{$str} = $value->{$_}->{content};
+			}
 		}
 
-		$value = $views_default->{cache}->{rrset};
+
+		if($major eq "2") {
+			$value = $views_default->{cache}->{rrset};
+		}
+		if($major eq "3") {
+			$value = $data->{views}->{view}->{_default}->{cache}->{rrset};
+		}
 		foreach(keys %{$value}) {
 			$str = $n . "crr_$_";
 			$crr{$str} = $value->{$_}->{counter};
 		}
+
 
 #		Socket I/O Statistics
 #		$value = $data->{bind}->{statistics}->{server}->{sockstat};
@@ -364,15 +504,27 @@ sub bind_update {
 			$rrdata .= ":";
 			$rrdata .= defined($sio{$str}) ? $sio{$str} : 0;
 		}
-		$value = $data->{bind}->{statistics}->{memory};
+
+		if($major eq "2") {
+			$value = $data->{bind}->{statistics}->{memory};
+		}
+		if($major eq "3") {
+			$value = $data->{memory};
+		}
 		$rrdata .= ":" . $value->{summary}->{TotalUse};
 		$rrdata .= ":" . $value->{summary}->{InUse};
 		$rrdata .= ":" . $value->{summary}->{BlockSize};
 		$rrdata .= ":" . $value->{summary}->{ContextSize};
 		$rrdata .= ":" . $value->{summary}->{Lost};
 		$rrdata .= ":0:0:0";
-		$value = $data->{bind}->{statistics}->{taskmgr};
-		$rrdata .= ":" . $value->{'thread-model'}->{'worker-threads'};
+
+		if($major eq "2") {
+			$value = $data->{bind}->{statistics}->{taskmgr};
+		}
+		if($major eq "3") {
+			$value = $data->{taskmgr};
+		}
+		$rrdata .= ":" . ($value->{'thread-model'}->{'worker-threads'} || 0);
 		$rrdata .= ":" . $value->{'thread-model'}->{'default-quantum'};
 		$rrdata .= ":" . $value->{'thread-model'}->{'tasks-running'};
 		$rrdata .= ":0:0:0";
@@ -386,23 +538,35 @@ sub bind_update {
 
 sub bind_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $bind = $config->{bind};
-	my @rigid = split(',', $bind->{rigid});
-	my @limit = split(',', $bind->{limit});
+	my @rigid = split(',', ($bind->{rigid} || ""));
+	my @limit = split(',', ($bind->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
 	my @riglim;
-	my @PNG;
-	my @PNGz;
+	my @IMG;
+	my @IMGz;
 	my @tmp;
 	my @tmpz;
+	my @CDEF;
 	my $e;
 	my $n;
 	my $n2;
@@ -431,9 +595,12 @@ sub bind_cgi {
 		"#9048D4",
 	);
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -442,23 +609,23 @@ sub bind_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line0;
 		my $line1;
 		my $line2;
 		my $line3;
 		my $n2;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		$line0 = "                                                                                                                                                $config->{graphs}->{_bind1}                                                                                                                                     $config->{graphs}->{_bind2}                                                                                                                                                                                                                                                                                                          $config->{graphs}->{_bind3}                                                                                                                                                                                                                                                                                                  $config->{graphs}->{_bind4}                                                                                                                                      $config->{graphs}->{_bind5}                                           $config->{graphs}->{_bind6}                     $config->{graphs}->{_bind7}";
 		for($n = 0; $n < scalar(my @bl = split(',', $bind->{list})); $n++) {
 			my $l = trim($bl[$n]);
@@ -530,12 +697,12 @@ sub bind_cgi {
 			}
 
 			my $i = length($line0);
-			printf(sprintf("%${i}s", sprintf("BIND server: %s", $l)));
+			push(@output, sprintf(sprintf("%${i}s", sprintf("BIND server: %s", $l))));
 		}
-		print("\n");
-		print("    $line1\n");
-		print("Time$line2 \n");
-		print("----$line3 \n");
+		push(@output, "\n");
+		push(@output, "    $line1\n");
+		push(@output, "Time$line2 \n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -545,54 +712,54 @@ sub bind_cgi {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
 			$from = 1;
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			for($n2 = 0; $n2 < scalar(my @bl = split(',', $bind->{list})); $n2++) {
 				# inq
 				$from += $n2 * 95;
 				$to = $from + 20;
 				@row = @$line[$from..$to];
-				printf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row);
+				push(@output, sprintf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row));
 				# ouq
 				$from = $to;
 				$to = $from + 20;
 				@row = @$line[$from..$to];
-				printf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row);
+				push(@output, sprintf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row));
 				# ss
 				$from = $to;
 				$to = $from + 20;
 				@row = @$line[$from..$to];
-				printf("%15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d ", @row);
+				push(@output, sprintf("%15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d ", @row));
 				# rs
 				$from = $to;
 				$to = $from + 20;
 				@row = @$line[$from..$to];
-				printf("%15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d ", @row);
+				push(@output, sprintf("%15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d %15d ", @row));
 				# crr
 				$from = $to;
 				$to = $from + 20;
 				@row = @$line[$from..$to];
-				printf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row);
+				push(@output, sprintf("%7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d %7d ", @row));
 				# mem
 				$from = $to;
 				$to = $from + 8;
 				@row = @$line[$from..$to];
-				printf("%10d %10d %10d %10d %10d ", @row);
+				push(@output, sprintf("%10d %10d %10d %10d %10d ", @row));
 				# tsk
 				$from = $to;
 				$to = $from + 6;
 				@row = @$line[$from..$to];
-				printf("%10d %10d %10d ", @row);
+				push(@output, sprintf("%10d %10d %10d ", @row));
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -608,15 +775,14 @@ sub bind_cgi {
 	}
 
 	for($n = 0; $n < scalar(my @bl = split(',', $bind->{list})); $n++) {
-		my $l = trim($bl[$n]);
 		for($n2 = 1; $n2 <= 7; $n2++) {
-			$str = $u . $package . $n . $n2 . "." . $tf->{when} . ".png";
-			push(@PNG, $str);
-			unlink("$PNG_DIR" . $str);
+			$str = $u . $package . $n . $n2 . "." . $tf->{when} . ".$imgfmt_lc";
+			push(@IMG, $str);
+			unlink("$IMG_DIR" . $str);
 			if(lc($config->{enable_zoom}) eq "y") {
-				$str = $u . $package . $n . $n2 . "z." . $tf->{when} . ".png";
-				push(@PNGz, $str);
-				unlink("$PNG_DIR" . $str);
+				$str = $u . $package . $n . $n2 . "z." . $tf->{when} . ".$imgfmt_lc";
+				push(@IMGz, $str);
+				unlink("$IMG_DIR" . $str);
 			}
 		}
 	}
@@ -625,22 +791,15 @@ sub bind_cgi {
 	foreach (my @bl = split(',', $bind->{list})) {
 		my $l = trim($_);
 		if($e) {
-			print("   <br>\n");
+			push(@output, print("   <br>\n"));
 		}
 		if($title) {
-			main::graph_header($title, 2);
+			push(@output, main::graph_header($title, 2));
 		}
-		undef(@riglim);
-		if(trim($rigid[0]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-		} else {
-			if(trim($rigid[0]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[0]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[0], $limit[0])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		my @i;
 		@i = split(',', $bind->{in_queries_list}->{$l});
 		for($n = 0; $n < scalar(@i); $n += 2) {
@@ -657,21 +816,25 @@ sub bind_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		if($title) {
-			print("    <tr>\n");
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7]",
 			"--title=$config->{graphs}->{_bind1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Queries/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
-			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:inq0=$rrd:bind" . $e . "_inq01:AVERAGE",
 			"DEF:inq1=$rrd:bind" . $e . "_inq02:AVERAGE",
@@ -693,22 +856,23 @@ sub bind_cgi {
 			"DEF:inq17=$rrd:bind" . $e . "_inq18:AVERAGE",
 			"DEF:inq18=$rrd:bind" . $e . "_inq19:AVERAGE",
 			"DEF:inq19=$rrd:bind" . $e . "_inq20:AVERAGE",
+			"CDEF:allvalues=inq0,inq1,inq2,inq3,inq4,inq5,inq6,inq7,inq8,inq9,inq10,inq11,inq12,inq13,inq14,inq15,inq16,inq17,inq18,inq19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7]",
 				"--title=$config->{graphs}->{_bind1}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Queries/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
-				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:inq0=$rrd:bind" . $e . "_inq01:AVERAGE",
 				"DEF:inq1=$rrd:bind" . $e . "_inq02:AVERAGE",
@@ -730,37 +894,38 @@ sub bind_cgi {
 				"DEF:inq17=$rrd:bind" . $e . "_inq18:AVERAGE",
 				"DEF:inq18=$rrd:bind" . $e . "_inq19:AVERAGE",
 				"DEF:inq19=$rrd:bind" . $e . "_inq20:AVERAGE",
+				"CDEF:allvalues=inq0,inq1,inq2,inq3,inq4,inq5,inq6,inq7,inq8,inq9,inq10,inq11,inq12,inq13,inq14,inq15,inq16,inq17,inq18,inq19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind1/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7] . "'>\n");
 			}
 		}
 		if($title) {
-			print("    </td>\n");
+			push(@output, "    </td>\n");
 		}
 
-		undef(@riglim);
-		if(trim($rigid[1]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[1]));
-		} else {
-			if(trim($rigid[1]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[1]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[1], $limit[1])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		@i = split(',', $bind->{out_queries_list}->{$l});
 		for($n = 0; $n < scalar(@i); $n += 2) {
 			$str = sprintf("%-8s", substr(trim($i[$n]), 0, 8));
@@ -776,20 +941,24 @@ sub bind_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		if($title) {
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 1]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 1]",
 			"--title=$config->{graphs}->{_bind2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Queries/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
-			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:ouq0=$rrd:bind" . $e . "_ouq01:AVERAGE",
 			"DEF:ouq1=$rrd:bind" . $e . "_ouq02:AVERAGE",
@@ -811,22 +980,23 @@ sub bind_cgi {
 			"DEF:ouq17=$rrd:bind" . $e . "_ouq18:AVERAGE",
 			"DEF:ouq18=$rrd:bind" . $e . "_ouq19:AVERAGE",
 			"DEF:ouq19=$rrd:bind" . $e . "_ouq20:AVERAGE",
+			"CDEF:allvalues=ouq0,ouq1,ouq2,ouq3,ouq4,ouq5,ouq6,ouq7,ouq8,ouq9,ouq10,ouq11,ouq12,ouq13,ouq14,ouq15,ouq16,ouq17,ouq18,ouq19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 1]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 1]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 1]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 1]",
 				"--title=$config->{graphs}->{_bind2}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Queries/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
-				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:ouq0=$rrd:bind" . $e . "_ouq01:AVERAGE",
 				"DEF:ouq1=$rrd:bind" . $e . "_ouq02:AVERAGE",
@@ -848,34 +1018,35 @@ sub bind_cgi {
 				"DEF:ouq17=$rrd:bind" . $e . "_ouq18:AVERAGE",
 				"DEF:ouq18=$rrd:bind" . $e . "_ouq19:AVERAGE",
 				"DEF:ouq19=$rrd:bind" . $e . "_ouq20:AVERAGE",
+				"CDEF:allvalues=ouq0,ouq1,ouq2,ouq3,ouq4,ouq5,ouq6,ouq7,ouq8,ouq9,ouq10,ouq11,ouq12,ouq13,ouq14,ouq15,ouq16,ouq17,ouq18,ouq19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 1]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 1]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 1] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 1] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 1] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 1] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 1] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 1] . "'>\n");
 			}
 		}
 
-		undef(@riglim);
-		if(trim($rigid[2]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[2]));
-		} else {
-			if(trim($rigid[2]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[2]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[2], $limit[2])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		@i = split(',', $bind->{server_stats_list}->{$l});
 		for($n = 0; $n < scalar(@i); $n += 2) {
 			$str = sprintf("%-14s", substr(trim($i[$n]), 0, 14));
@@ -891,21 +1062,25 @@ sub bind_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		if($title) {
-			print("    <tr>\n");
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 2]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 2]",
 			"--title=$config->{graphs}->{_bind3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Requests/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
-			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:ss0=$rrd:bind" . $e . "_ss01:AVERAGE",
 			"DEF:ss1=$rrd:bind" . $e . "_ss02:AVERAGE",
@@ -927,22 +1102,23 @@ sub bind_cgi {
 			"DEF:ss17=$rrd:bind" . $e . "_ss18:AVERAGE",
 			"DEF:ss18=$rrd:bind" . $e . "_ss19:AVERAGE",
 			"DEF:ss19=$rrd:bind" . $e . "_ss20:AVERAGE",
+			"CDEF:allvalues=ss0,ss1,ss2,ss3,ss4,ss5,ss6,ss7,ss8,ss9,ss10,ss11,ss12,ss13,ss14,ss15,ss16,ss17,ss18,ss19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 2]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 2]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 2]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 2]",
 				"--title=$config->{graphs}->{_bind3}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Requests/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
-				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:ss0=$rrd:bind" . $e . "_ss01:AVERAGE",
 				"DEF:ss1=$rrd:bind" . $e . "_ss02:AVERAGE",
@@ -964,37 +1140,38 @@ sub bind_cgi {
 				"DEF:ss17=$rrd:bind" . $e . "_ss18:AVERAGE",
 				"DEF:ss18=$rrd:bind" . $e . "_ss19:AVERAGE",
 				"DEF:ss19=$rrd:bind" . $e . "_ss20:AVERAGE",
+				"CDEF:allvalues=ss0,ss1,ss2,ss3,ss4,ss5,ss6,ss7,ss8,ss9,ss10,ss11,ss12,ss13,ss14,ss15,ss16,ss17,ss18,ss19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 2]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind3/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 2] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 2] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 2] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 2] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 2] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 2] . "'>\n");
 			}
 		}
 		if($title) {
-			print("    </td>\n");
+			push(@output, "    </td>\n");
 		}
 
-		undef(@riglim);
-		if(trim($rigid[3]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[3]));
-		} else {
-			if(trim($rigid[3]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[3]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[3], $limit[3])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		@i = split(',', $bind->{resolver_stats_list}->{$l});
 		for($n = 0; $n < scalar(@i); $n += 2) {
 			$str = sprintf("%-14s", substr(trim($i[$n]), 0, 14));
@@ -1010,20 +1187,24 @@ sub bind_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		if($title) {
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 3]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 3]",
 			"--title=$config->{graphs}->{_bind4}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Requests/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
-			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:rs0=$rrd:bind" . $e . "_rs01:AVERAGE",
 			"DEF:rs1=$rrd:bind" . $e . "_rs02:AVERAGE",
@@ -1045,22 +1226,23 @@ sub bind_cgi {
 			"DEF:rs17=$rrd:bind" . $e . "_rs18:AVERAGE",
 			"DEF:rs18=$rrd:bind" . $e . "_rs19:AVERAGE",
 			"DEF:rs19=$rrd:bind" . $e . "_rs20:AVERAGE",
+			"CDEF:allvalues=rs0,rs1,rs2,rs3,rs4,rs5,rs6,rs7,rs8,rs9,rs10,rs11,rs12,rs13,rs14,rs15,rs16,rs17,rs18,rs19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 3]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 3]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 3]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 3]",
 				"--title=$config->{graphs}->{_bind4}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Requests/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
-				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:rs0=$rrd:bind" . $e . "_rs01:AVERAGE",
 				"DEF:rs1=$rrd:bind" . $e . "_rs02:AVERAGE",
@@ -1082,34 +1264,35 @@ sub bind_cgi {
 				"DEF:rs17=$rrd:bind" . $e . "_rs18:AVERAGE",
 				"DEF:rs18=$rrd:bind" . $e . "_rs19:AVERAGE",
 				"DEF:rs19=$rrd:bind" . $e . "_rs20:AVERAGE",
+				"CDEF:allvalues=rs0,rs1,rs2,rs3,rs4,rs5,rs6,rs7,rs8,rs9,rs10,rs11,rs12,rs13,rs14,rs15,rs16,rs17,rs18,rs19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 3]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 3]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind4/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 3] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 3] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 3] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 3] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 3] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 3] . "'>\n");
 			}
 		}
 
-		undef(@riglim);
-		if(trim($rigid[4]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[4]));
-		} else {
-			if(trim($rigid[4]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[4]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[4], $limit[4])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		@i = split(',', $bind->{cache_rrsets_list}->{$l});
 		for($n = 0; $n < scalar(@i); $n += 2) {
 			$str = sprintf("%-8s", substr(trim($i[$n]), 0, 8));
@@ -1125,21 +1308,25 @@ sub bind_cgi {
 			push(@tmp, "COMMENT: \\n");
 		}
 		if($title) {
-			print("    <tr>\n");
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 4]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 4]",
 			"--title=$config->{graphs}->{_bind5}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=RRsets",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
-			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:crr0=$rrd:bind" . $e . "_crr01:AVERAGE",
 			"DEF:crr1=$rrd:bind" . $e . "_crr02:AVERAGE",
@@ -1161,22 +1348,23 @@ sub bind_cgi {
 			"DEF:crr17=$rrd:bind" . $e . "_crr18:AVERAGE",
 			"DEF:crr18=$rrd:bind" . $e . "_crr19:AVERAGE",
 			"DEF:crr19=$rrd:bind" . $e . "_crr20:AVERAGE",
+			"CDEF:allvalues=crr0,crr1,crr2,crr3,crr4,crr5,crr6,crr7,crr8,crr9,crr10,crr11,crr12,crr13,crr14,crr15,crr16,crr17,crr18,crr19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 4]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 4]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 4]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 4]",
 				"--title=$config->{graphs}->{_bind5}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=RRsets",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
-				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:crr0=$rrd:bind" . $e . "_crr01:AVERAGE",
 				"DEF:crr1=$rrd:bind" . $e . "_crr02:AVERAGE",
@@ -1198,37 +1386,38 @@ sub bind_cgi {
 				"DEF:crr17=$rrd:bind" . $e . "_crr18:AVERAGE",
 				"DEF:crr18=$rrd:bind" . $e . "_crr19:AVERAGE",
 				"DEF:crr19=$rrd:bind" . $e . "_crr20:AVERAGE",
+				"CDEF:allvalues=crr0,crr1,crr2,crr3,crr4,crr5,crr6,crr7,crr8,crr9,crr10,crr11,crr12,crr13,crr14,crr15,crr16,crr17,crr18,crr19,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 4]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 4]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind5/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 4] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 4] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 4] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 4] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 4] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 4] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 4] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 4] . "'>\n");
 			}
 		}
 		if($title) {
-			print("    </td>\n");
+			push(@output, "    </td>\n");
 		}
 
-		undef(@riglim);
-		if(trim($rigid[5]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[5]));
-		} else {
-			if(trim($rigid[5]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[5]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[5], $limit[5])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "LINE1:mem_tu#EEEE44:TotalUse");
 		push(@tmp, "GPRINT:mem_tu_mb" . ":LAST: Cur\\:%6.1lf MB    ");
 		push(@tmpz, "LINE2:mem_tu#EEEE44:TotalUse");
@@ -1245,18 +1434,23 @@ sub bind_cgi {
 		push(@tmp, "GPRINT:mem_l_mb" . ":LAST:     Cur\\:%6.1lf MB\\n");
 		push(@tmpz, "LINE2:mem_l#EE4444:Lost");
 		if($title) {
-			print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
 		}
 		($width, $height) = split('x', $config->{graph_size}->{medium2});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 5]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 5]",
 			"--title=$config->{graphs}->{_bind6}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=bytes",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -1270,20 +1464,22 @@ sub bind_cgi {
 			"CDEF:mem_bs_mb=mem_bs,1024,/,1024,/",
 			"CDEF:mem_cs_mb=mem_cs,1024,/,1024,/",
 			"CDEF:mem_l_mb=mem_l,1024,/,1024,/",
+			"CDEF:allvalues=mem_tu,mem_iu,mem_bs,mem_cs,mem_l,+,+,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 5]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 5]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 5]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 5]",
 				"--title=$config->{graphs}->{_bind6}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=bytes",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
@@ -1292,34 +1488,35 @@ sub bind_cgi {
 				"DEF:mem_bs=$rrd:bind" . $e . "_mem_blksize:AVERAGE",
 				"DEF:mem_cs=$rrd:bind" . $e . "_mem_ctxtsize:AVERAGE",
 				"DEF:mem_l=$rrd:bind" . $e . "_mem_lost:AVERAGE",
+				"CDEF:allvalues=mem_tu,mem_iu,mem_bs,mem_cs,mem_l,+,+,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 5]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 5]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind6/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 5] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 5] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 5] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 5] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 5] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 5] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 5] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 5] . "'>\n");
 			}
 		}
 
-		undef(@riglim);
-		if(trim($rigid[6]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[6]));
-		} else {
-			if(trim($rigid[6]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[6]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[6], $limit[6])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "LINE1:tsk_dq#EEEE44:Default Quantum");
 		push(@tmp, "GPRINT:tsk_dq" . ":LAST:        Current\\:%4.0lf\\n");
 		push(@tmpz, "LINE2:tsk_dq#EEEE44:Default Quantum");
@@ -1329,76 +1526,92 @@ sub bind_cgi {
 		push(@tmp, "LINE1:tsk_tr#44EEEE:Tasks Running");
 		push(@tmp, "GPRINT:tsk_tr" . ":LAST:          Current\\:%4.0lf\\n");
 		push(@tmpz, "LINE2:tsk_tr#44EEEE:Tasks Running");
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{medium2});
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 7 + 6]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 7 + 6]",
 			"--title=$config->{graphs}->{_bind7}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Tasks",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:tsk_wt=$rrd:bind" . $e . "_tsk_workthrds:AVERAGE",
 			"DEF:tsk_dq=$rrd:bind" . $e . "_tsk_defquantm:AVERAGE",
 			"DEF:tsk_tr=$rrd:bind" . $e . "_tsk_tasksrun:AVERAGE",
+			"CDEF:allvalues=tsk_wt,tsk_dq,tsk_tr,+,+",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 7 + 6]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 7 + 6]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 7 + 6]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 7 + 6]",
 				"--title=$config->{graphs}->{_bind7}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Tasks",
 				"--width=$width",
 				"--height=$height",
-				"--lower-limit=0",
+				@riglim,
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:tsk_wt=$rrd:bind" . $e . "_tsk_workthrds:AVERAGE",
 				"DEF:tsk_dq=$rrd:bind" . $e . "_tsk_defquantm:AVERAGE",
 				"DEF:tsk_tr=$rrd:bind" . $e . "_tsk_tasksrun:AVERAGE",
+				"CDEF:allvalues=tsk_wt,tsk_dq,tsk_tr,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 7 + 6]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 7 + 6]: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /bind7/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 6] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 7 + 6] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 6] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 6] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 7 + 6] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 6] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 7 + 6] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 7 + 6] . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
 
-			print("    <tr>\n");
-			print "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n";
-			print "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
-			print "       <font size='-1'>\n";
-			print "        <b>&nbsp;&nbsp;<a href='" . $l . "' style='{color: $colors->{title_fg_color}}'>$l</a><b>\n";
-			print "       </font></font>\n";
-			print "      </td>\n";
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    <tr>\n");
+			push(@output, "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n");
+			push(@output, "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n");
+			push(@output, "       <font size='-1'>\n");
+			push(@output, "        <b>&nbsp;&nbsp;<a href='" . $l . "' style='color: $colors->{title_fg_color}'>$l</a><b>\n");
+			push(@output, "       </font></font>\n");
+			push(@output, "      </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
 		$e++;
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;;
 }
 
 1;

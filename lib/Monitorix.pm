@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,8 +23,9 @@ package Monitorix;
 use strict;
 use warnings;
 use Exporter 'import';
-use POSIX qw(setuid setgid setsid);
-our @EXPORT = qw(logger trim min max celsius_to httpd_setup get_nvidia_data get_ati_data flush_accounting_rules);
+use POSIX qw(setuid setgid setsid getgid getuid);
+use Socket;
+our @EXPORT = qw(logger trim min max celsius_to uptime2str setup_riglim httpd_setup get_nvidia_data get_ati_data flush_accounting_rules);
 
 sub logger {
 	my ($msg) = @_;
@@ -69,24 +70,57 @@ sub celsius_to {
 	return $celsius;
 }
 
+sub uptime2str {
+	my $uptime = shift || 0;
+	my $str;
+
+	my $d = int($uptime / (60 * 60 * 24));
+	my $h = int($uptime / (60 * 60)) % 24;
+	my $m = int($uptime / 60) % 60;
+
+	my $d_string = $d ? sprintf("%d days,", $d) : "";
+	my $h_string = $h ? sprintf("%d", $h) : "";
+	my $m_string = $h ? sprintf("%sh %dm", $h, $m) : sprintf("%d min", $m);
+
+	return "$d_string $m_string";
+}
+
+sub setup_riglim {
+	my $myself = (caller(0))[3];
+	my ($rigid, $limit) = @_;
+	my @riglim;
+
+	my ($upper, $lower) = split(':', trim($limit) || "0:0");
+	if(trim($rigid || 0) eq 0) {
+		push(@riglim, "--lower-limit=$lower") if defined($lower);
+	} else {
+		push(@riglim, "--upper-limit=" . ($upper || 0));
+		push(@riglim, "--lower-limit=" . ($lower || 0));
+		push(@riglim, "--rigid") if trim($rigid || 0) eq 2;
+	}
+	return \@riglim;
+}
+
 sub httpd_setup {
+	my $myself = (caller(0))[3];
 	my ($config, $debug) = @_;
 	my $pid;
 
 	my (undef, undef, $uid) = getpwnam($config->{httpd_builtin}->{user});
 	my (undef, undef, $gid) = getgrnam($config->{httpd_builtin}->{group});
+	my $host = $config->{httpd_builtin}->{host};
 	my $port = $config->{httpd_builtin}->{port};
 
 	if(!defined($uid)) {
-		logger("ERROR: invalid user defined for the built-in HTTP server.");
+		logger("$myself: ERROR: invalid user defined.");
 		return;
 	}
 	if(!defined($gid)) {
-		logger("ERROR: invalid group defined for the built-in HTTP server.");
+		logger("$myself: ERROR: invalid group defined.");
 		return;
 	}
 	if(!defined($port)) {
-		logger("ERROR: invalid port defined for the built-in HTTP server.");
+		logger("$myself: ERROR: invalid port defined.");
 		return;
 	}
 
@@ -101,13 +135,35 @@ sub httpd_setup {
 	chown($uid, $gid, $config->{httpd_builtin}->{log_file});
 
 	setgid($gid);
+	if(getgid() != $gid) {
+		logger("WARNING: $myself: unable to setgid($gid).");
+		exit(1);
+	}
 	setuid($uid);
+	if(getuid() != $uid) {
+		logger("WARNING: $myself: unable to setuid($uid).");
+		exit(1);
+	}
 	setsid();
 	$SIG{$_} = 'DEFAULT' for keys %SIG;		# reset all sighandlers
 	$0 = "monitorix-httpd listening on $port";	# change process' name
 	chdir($config->{base_dir});
 
-	my $server = HTTPServer->new($port);
+	# check if 'htpasswd' file does exists and it's accessible
+	if(lc($config->{httpd_builtin}->{auth}->{enabled}) eq "y") {
+		if(! -r ($config->{httpd_builtin}->{auth}->{htpasswd} || "")) {
+			logger("$myself: '$config->{httpd_builtin}->{auth}->{htpasswd}' $!");
+		}
+	} else {
+		if(!grep {$_ eq $config->{httpd_builtin}->{host}}
+			("localhost", "127.0.0.1")) {
+			logger("WARNING: the built-in HTTP server has authentication disabled.");
+		}
+	}
+
+	my $server = HTTPServer->new();
+	$server->host($host);
+	$server->port($port);
 	$server->run();
 	exit(0);
 }
@@ -134,8 +190,10 @@ sub get_nvidia_data {
 	}
 	for($l = 0; $l < scalar(@data); $l++) {
 		if($data[$l] =~ /Memory Usage/) {
-			$check_mem = 1;
-			next;
+			if($data[$l] !~ /BAR1 Memory Usage/) {
+				$check_mem = 1;
+				next;
+			}
 		}
 		if($check_mem) {	
 			if($data[$l] =~ /Total/) {
@@ -181,10 +239,12 @@ sub get_nvidia_data {
 				my ($value, undef) = split(' ', $tmp);
 				$value =~ s/[-]/./;
 				$value =~ s/[^0-9.]//g;
+				$value ||= 0;	# zero if not numeric
 				if(int($value) > 0) {
 					$cpu = int($value);
 				}
 			}
+			# not used
 			if($data[$l] =~ /Memory/) {
 				my (undef, $tmp) = split(':', $data[$l]);
 				if($tmp eq "\n") {
@@ -194,6 +254,7 @@ sub get_nvidia_data {
 				my ($value, undef) = split(' ', $tmp);
 				$value =~ s/[-]/./;
 				$value =~ s/[^0-9.]//g;
+				$value ||= 0;	# zero if not numeric
 				if(int($value) > 0) {
 					$mem = int($value);
 				}
@@ -206,7 +267,7 @@ sub get_nvidia_data {
 			next;
 		}
 		if($check_temp) {	
-			if($data[$l] =~ /Gpu/) {
+			if($data[$l] =~ /Gpu.*?(?:Current Temp)?/i) {
 				my (undef, $tmp) = split(':', $data[$l]);
 				if($tmp eq "\n") {
 					$l++;
@@ -256,14 +317,20 @@ sub get_ati_data {
 # flushes out all Monitorix iptables/ipfw rules
 sub flush_accounting_rules {
 	my ($config, $debug) = @_;
+	my $table = $config->{ip_default_table};
 
 	if($config->{os} eq "Linux") {
 		my $num = 0;
+		my $num6 = 0;
+		my $cmd = "iptables" . $config->{iptables_wait_lock};
+		my $cmd6 = "ip6tables" . $config->{iptables_wait_lock};
 
 		logger("Flushing out iptables rules.") if $debug;
 		{
 			my @names;
-			if(open(IN, "iptables -nxvL INPUT --line-numbers |")) {
+
+			# IPv4
+			if(open(IN, "$cmd -t $table -nxvL INPUT --line-numbers |")) {
 				my @rules;
 				while(<IN>) {
 					my ($rule, undef, undef, $name) = split(' ', $_);
@@ -275,11 +342,11 @@ sub flush_accounting_rules {
 				close(IN);
 				@rules = reverse(@rules);
 				foreach(@rules) {
-					system("iptables -D INPUT $_");
+					system("$cmd -t $table -D INPUT $_");
 					$num++;
 				}
 			}
-			if(open(IN, "iptables -nxvL OUTPUT --line-numbers |")) {
+			if(open(IN, "$cmd -t $table -nxvL OUTPUT --line-numbers |")) {
 				my @rules;
 				while(<IN>) {
 					my ($rule, undef, undef, $name) = split(' ', $_);
@@ -290,15 +357,54 @@ sub flush_accounting_rules {
 				close(IN);
 				@rules = reverse(@rules);
 				foreach(@rules) {
-					system("iptables -D OUTPUT $_");
+					system("$cmd -t $table -D OUTPUT $_");
 					$num++;
 				}
 			}
 			foreach(@names) {
-				system("iptables -X $_");
+				system("$cmd -t $table -X $_");
+			}
+
+			# IPv6
+			if(lc($config->{ipv6_disabled} || "") ne "y") {
+				undef(@names);
+				if(open(IN, "$cmd6 -t $table -nxvL INPUT --line-numbers |")) {
+					my @rules;
+					while(<IN>) {
+						my ($rule, undef, undef, $name) = split(' ', $_);
+						if($name =~ /monitorix_IN/ || /monitorix_OUT/ || /monitorix_nginx_IN/) {
+							push(@rules, $rule);
+							push(@names, $name);
+						}
+					}
+					close(IN);
+					@rules = reverse(@rules);
+					foreach(@rules) {
+						system("$cmd6 -t $table -D INPUT $_");
+						$num6++;
+					}
+				}
+				if(open(IN, "$cmd6 -t $table -nxvL OUTPUT --line-numbers |")) {
+					my @rules;
+					while(<IN>) {
+						my ($rule, undef, undef, $name) = split(' ', $_);
+						if($name =~ /monitorix_IN/ || /monitorix_OUT/ || /monitorix_nginx_IN/) {
+							push(@rules, $rule);
+						}
+					}
+					close(IN);
+					@rules = reverse(@rules);
+					foreach(@rules) {
+						system("$cmd6 -t $table -D OUTPUT $_");
+						$num6++;
+					}
+				}
+				foreach(@names) {
+					system("$cmd6 -t $table -X $_");
+				}
 			}
 		}
-		if(open(IN, "iptables -nxvL FORWARD --line-numbers |")) {
+		if(open(IN, "$cmd -t $table -nxvL FORWARD --line-numbers |")) {
 			my @rules;
 			my @names;
 			while(<IN>) {
@@ -311,15 +417,41 @@ sub flush_accounting_rules {
 			close(IN);
 			@rules = reverse(@rules);
 			foreach(@rules) {
-				system("iptables -D FORWARD $_");
+				system("$cmd -t $table -D FORWARD $_");
 				$num++;
 			}
 			foreach(@names) {
-				system("iptables -F $_");
-				system("iptables -X $_");
+				system("$cmd -t $table -F $_");
+				system("$cmd -t $table -X $_");
+			}
+		}
+		if(lc($config->{ipv6_disabled} || "") ne "y") {
+			if(open(IN, "$cmd6 -t $table -nxvL FORWARD --line-numbers |")) {
+				my @rules;
+				my @names;
+				while(<IN>) {
+					my ($rule, undef, undef, $name) = split(' ', $_);
+					if($name =~ /monitorix_daily_/ || /monitorix_total_/) {
+						push(@rules, $rule);
+						push(@names, $name);
+					}
+				}
+				close(IN);
+				@rules = reverse(@rules);
+				foreach(@rules) {
+					system("$cmd6 -t $table -D FORWARD $_");
+					$num6++;
+				}
+				foreach(@names) {
+					system("$cmd6 -t $table -F $_");
+					system("$cmd6 -t $table -X $_");
+				}
 			}
 		}
 		logger("$num iptables rules have been flushed.") if $debug;
+		if(lc($config->{ipv6_disabled} || "") ne "y") {
+			logger("$num6 ip6tables rules have been flushed.") if $debug;
+		}
 	}
 	if(grep {$_ eq $config->{os}} ("FreeBSD", "OpenBSD", "NetBSD")) {
 		logger("Flushing out ipfw rules.") if $debug;

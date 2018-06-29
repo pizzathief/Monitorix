@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -36,8 +36,14 @@ sub fail2ban_init {
 
 	my $info;
 	my @ds;
+	my @rra;
 	my @tmp;
 	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
 
 	if(-e $rrd) {
 		$info = RRDs::info($rrd);
@@ -47,15 +53,30 @@ sub fail2ban_init {
 					push(@ds, substr($key, 3, index($key, ']') - 3));
 				}
 			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
 		}
 		if(scalar(@ds) / 9 != scalar(my @fl = split(',', $fail2ban->{list}))) {
-			logger("Detected size mismatch between 'list' (" . scalar(my @fl = split(',', $fail2ban->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+			logger("$myself: Detected size mismatch between 'list' (" . scalar(my @fl = split(',', $fail2ban->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		for($n = 0; $n < scalar(my @fl = split(',', $fail2ban->{list})); $n++) {
 			push(@tmp, "DS:fail2ban" . $n . "_j1:GAUGE:120:0:U");
 			push(@tmp, "DS:fail2ban" . $n . "_j2:GAUGE:120:0:U");
@@ -74,19 +95,19 @@ sub fail2ban_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -147,8 +168,8 @@ sub fail2ban_update {
 			if(/^$date/) {
 				my $e = 0;
 				while($e < scalar(my @fl = split(',', $fail2ban->{list}))) {
+					my $e2 = 0;
 					foreach my $i (split(',', $fail2ban->{desc}->{$e})) {
-						my $e2 = 0;
 						($str = trim($i)) =~ s/\[/\\[/;
 						$str =~ s/\]/\\]/;
 						$jails[$e][$e2] = 0 unless defined $jails[$e][$e2];
@@ -183,23 +204,35 @@ sub fail2ban_update {
 
 sub fail2ban_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $fail2ban = $config->{fail2ban};
-	my @rigid = split(',', $fail2ban->{rigid});
-	my @limit = split(',', $fail2ban->{limit});
+	my @rigid = split(',', ($fail2ban->{rigid} || ""));
+	my @limit = split(',', ($fail2ban->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
 	my @riglim;
-	my @PNG;
-	my @PNGz;
+	my @IMG;
+	my @IMGz;
 	my @tmp;
 	my @tmpz;
+	my @CDEF;
 	my $n;
 	my $n2;
 	my $str;
@@ -216,9 +249,12 @@ sub fail2ban_cgi {
 		"#EE4444",
 	);
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -227,21 +263,21 @@ sub fail2ban_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line1;
 		my $line2;
 		my $line3;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		for($n = 0; $n < scalar(my @fl = split(',', $fail2ban->{list})); $n++) {
 			$line1 = "";
 			foreach my $i (split(',', $fail2ban->{desc}->{$n})) {
@@ -252,12 +288,12 @@ sub fail2ban_cgi {
 			}
 			if($line1) {
 				my $i = length($line1);
-				printf(sprintf("%${i}s", sprintf("%s", trim($fl[$n]))));
+				push(@output, sprintf(sprintf("%${i}s", sprintf("%s", trim($fl[$n])))));
 			}
 		}
-		print("\n");
-		print("Time$line2\n");
-		print("----$line3 \n");
+		push(@output, "\n");
+		push(@output, "Time$line2\n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -268,7 +304,7 @@ sub fail2ban_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			for($n2 = 0; $n2 < scalar(my @fl = split(',', $fail2ban->{list})); $n2++) {
 				$n3 = 0;
 				foreach my $i (split(',', $fail2ban->{desc}->{$n2})) {
@@ -276,19 +312,19 @@ sub fail2ban_cgi {
 					$to = $from + 1;
 					my ($j) = @$line[$from..$to];
 					@row = ($j);
-					printf("%20d ", @row);
+					push(@output, sprintf("%20d ", @row));
 				}
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -304,39 +340,33 @@ sub fail2ban_cgi {
 	}
 
 	for($n = 0; $n < scalar(my @fl = split(',', $fail2ban->{list})); $n++) {
-		$str = $u . $package . $n . "." . $tf->{when} . ".png";
-		push(@PNG, $str);
-		unlink("$PNG_DIR" . $str);
+		$str = $u . $package . $n . "." . $tf->{when} . ".$imgfmt_lc";
+		push(@IMG, $str);
+		unlink("$IMG_DIR" . $str);
 		if(lc($config->{enable_zoom}) eq "y") {
-			$str = $u . $package . $n . "z." . $tf->{when} . ".png";
-			push(@PNGz, $str);
-			unlink("$PNG_DIR" . $str);
+			$str = $u . $package . $n . "z." . $tf->{when} . ".$imgfmt_lc";
+			push(@IMGz, $str);
+			unlink("$IMG_DIR" . $str);
 		}
 	}
 
-	if(trim($rigid[0]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[0]));
-	} else {
-		if(trim($rigid[0]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	$n = 0;
 	while($n < scalar(my @fl = split(',', $fail2ban->{list}))) {
 		if($title) {
 			if($n == 0) {
-				main::graph_header($title, $fail2ban->{graphs_per_row});
+				push(@output, main::graph_header($title, $fail2ban->{graphs_per_row}));
 			}
-			print("    <tr>\n");
+			push(@output, "    <tr>\n");
 		}
 		for($n2 = 0; $n2 < $fail2ban->{graphs_per_row}; $n2++) {
 			last unless $n < scalar(my @fl = split(',', $fail2ban->{list}));
 			if($title) {
-				print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
 			undef(@tmp);
 			undef(@tmpz);
+			undef(@CDEF);
 			my $e = 0;
 			foreach my $i (split(',', $fail2ban->{desc}->{$n})) {
 				$str = sprintf("%-25s", substr(trim($i), 0, 25));
@@ -352,17 +382,22 @@ sub fail2ban_cgi {
 				push(@tmp, "COMMENT: \\n");
 				$e++;
 			}
+			if(lc($config->{show_gaps}) eq "y") {
+				push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+				push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+				push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+			}
 			($width, $height) = split('x', $config->{graph_size}->{medium});
 			$str = substr(trim($fl[$n]), 0, 25);
-			RRDs::graph("$PNG_DIR" . "$PNG[$n]",
+			$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$n]",
 				"--title=$str  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
-				"--vertical-label=bans/s",
+				"--imgformat=$imgfmt_uc",
+				"--vertical-label=Bans/min",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
@@ -375,20 +410,22 @@ sub fail2ban_cgi {
 				"DEF:j7=$rrd:fail2ban" . $n . "_j7:AVERAGE",
 				"DEF:j8=$rrd:fail2ban" . $n . "_j8:AVERAGE",
 				"DEF:j9=$rrd:fail2ban" . $n . "_j9:AVERAGE",
+				"CDEF:allvalues=j1,j2,j3,j4,j5,j6,j7,j8,j9,+,+,+,+,+,+,+,+",
+				@CDEF,
 				@tmp);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNG[$n]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$n]: $err\n") if $err;
 			if(lc($config->{enable_zoom}) eq "y") {
 				($width, $height) = split('x', $config->{graph_size}->{zoom});
-				RRDs::graph("$PNG_DIR" . "$PNGz[$n]",
+				$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$n]",
 					"--title=$str  ($tf->{nwhen}$tf->{twhen})",
 					"--start=-$tf->{nwhen}$tf->{twhen}",
-					"--imgformat=PNG",
-					"--vertical-label=bans/s",
+					"--imgformat=$imgfmt_uc",
+					"--vertical-label=Bans/min",
 					"--width=$width",
 					"--height=$height",
 					@riglim,
-					"--lower-limit=0",
+					$zoom,
 					@{$cgi->{version12}},
 					@{$cgi->{version12_small}},
 					@{$colors->{graph_colors}},
@@ -401,36 +438,44 @@ sub fail2ban_cgi {
 					"DEF:j7=$rrd:fail2ban" . $n . "_j7:AVERAGE",
 					"DEF:j8=$rrd:fail2ban" . $n . "_j8:AVERAGE",
 					"DEF:j9=$rrd:fail2ban" . $n . "_j9:AVERAGE",
+					"CDEF:allvalues=j1,j2,j3,j4,j5,j6,j7,j8,j9,+,+,+,+,+,+,+,+",
+					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
-				print("ERROR: while graphing $PNG_DIR" . "$PNGz[$n]: $err\n") if $err;
+				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
 			}
 			if($title || ($silent =~ /imagetag/ && $graph =~ /fail2ban$n/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
-					}
-					else {
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$n] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
+					} else {
+						if($version eq "new") {
+							$picz_width = $picz->{image_width} * $config->{global_zoom};
+							$picz_height = $picz->{image_height} * $config->{global_zoom};
+						} else {
+							$picz_width = $width + 115;
+							$picz_height = $height + 100;
+						}
+						push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$n] . "'>\n");
+					push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "'>\n");
 				}
 			}
 			if($title) {
-				print("    </td>\n");
+				push(@output, "    </td>\n");
 			}
 			$n++;
 		}
 		if($title) {
-			print("    </tr>\n");
+			push(@output, "    </tr>\n");
 		}
 	}
 	if($title) {
-		main::graph_footer();
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

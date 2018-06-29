@@ -2,7 +2,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ use CGI qw(:standard);
 use Config::General;
 use POSIX;
 use RRDs;
+use Encode;
 
 my %config;
 my %cgi;
@@ -45,6 +46,7 @@ sub multihost {
 	my $n2;
 	my @host;
 	my @url;
+	my @foot_url;
 	my $multihost = $config->{multihost};
 
 	if($cgi->{val} =~ m/group(\d*)/) {
@@ -74,7 +76,8 @@ sub multihost {
 				my $h2 = trim($remotehost_list[$n2]);
 				if($h eq $h2) {
 					push(@host, $h);
-					push(@url, (split(',', $multihost->{remotehost_desc}->{$n}))[0] . (split(',', $multihost->{remotehost_desc}->{$n}))[1]);
+					push(@url, (split(',', $multihost->{remotehost_desc}->{$n2}))[0] . (split(',', $multihost->{remotehost_desc}->{$n2}))[2]);
+					push(@foot_url, (split(',', $multihost->{remotehost_desc}->{$n2}))[0] . (split(',', $multihost->{remotehost_desc}->{$n2}))[1]);
 				}
 			}
 		}
@@ -82,7 +85,8 @@ sub multihost {
 		my @remotehost_list = split(',', $multihost->{remotehost_list});
 		for($n = 0; $n < scalar(@remotehost_list); $n++) {
 			push(@host, trim($remotehost_list[$n]));
-			push(@url, (split(',', $multihost->{remotehost_desc}->{$n}))[0] . (split(',', $multihost->{remotehost_desc}->{$n}))[1]);
+			push(@url, (split(',', $multihost->{remotehost_desc}->{$n}))[0] . (split(',', $multihost->{remotehost_desc}->{$n}))[2]);
+			push(@foot_url, (split(',', $multihost->{remotehost_desc}->{$n}))[0] . (split(',', $multihost->{remotehost_desc}->{$n}))[1]);
 		}
 	}
 
@@ -97,7 +101,7 @@ sub multihost {
 				if($n < scalar(@host)) {
 					print "  <td bgcolor='$colors->{title_bg_color}'>\n";
 					print "   <font face='Verdana, sans-serif' color='$colors->{fg_color}'>\n";
-					print "   <b>&nbsp;&nbsp;" . $host[$n] . "<b>\n";
+					print "   <b>&nbsp;&nbsp;" . $host[$n] . "</b>\n";
 					print "   </font>\n";
 					print "  </td>\n";
 				}
@@ -108,7 +112,7 @@ sub multihost {
 			for($n2 = 0, $n = $n - $multihost->{graphs_per_row}; $n2 < $multihost->{graphs_per_row}; $n2++) {
 				if($n < scalar(@host)) {
 					print "  <td bgcolor='$colors->{title_bg_color}' style='vertical-align: top; height: 10%; width: 10%;'>\n";
-					print "   <iframe src=" . (split(',', $multihost->{remotehost_desc}->{$n}))[0] . (split(',', $multihost->{remotehost_desc}->{$n}))[2] . "/monitorix.cgi?mode=localhost&when=$cgi->{when}&graph=$graph&color=$cgi->{color}&silent=imagetag height=201 width=397 frameborder=0 marginwidth=0 marginheight=0 scrolling=no></iframe>\n";
+					print "   <iframe src='" . $url[$n] . "/monitorix.cgi?mode=localhost&when=$cgi->{when}&graph=$graph&color=$cgi->{color}&silent=imagetag' height=201 width=397 frameborder=0 marginwidth=0 marginheight=0 scrolling=no></iframe>\n";
 					print "  </td>\n";
 
 				}
@@ -122,7 +126,7 @@ sub multihost {
 					print "  <td bgcolor='$colors->{title_bg_color}'>\n";
 					print "   <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
 					print "   <font size='-1'>\n";
-					print "    <b>&nbsp;&nbsp;<a href='" . $url[$n] . "' style='{color: " . $colors->{title_fg_color} . "}'>$url[$n]</a><b>\n";
+					print "    <b>&nbsp;&nbsp;<a href='" . $foot_url[$n] . "' style='color: " . $colors->{title_fg_color} . ";'>$foot_url[$n]</a></b>\n";
 					print "   </font></font>\n";
 					print "  </td>\n";
 				}
@@ -139,13 +143,13 @@ sub multihost {
 		print "   <tr>\n";
 		print "    <td bgcolor='$colors->{title_bg_color}'>\n";
 		print "    <font face='Verdana, sans-serif' color='$colors->{fg_color}'>\n";
-		print "    <b>&nbsp;&nbsp;" . $host[$cgi->{val}] . "<b>\n";
+		print "    <b>&nbsp;&nbsp;" . $host[$cgi->{val}] . "</b>\n";
 		print "    </font>\n";
 		print "    </td>\n";
 		print "   </tr>\n";
 		print "   <tr>\n";
 		print "    <td bgcolor='$colors->{title_bg_color}' style='vertical-align: top; height: 10%; width: 10%;'>\n";
-		print "     <iframe src=" . (split(',', $multihost->{remotehost_desc}->{$cgi->{val}}))[0] . (split(',', $multihost->{remotehost_desc}->{$cgi->{val}}))[2] . "/monitorix.cgi?mode=localhost&when=$cgi->{when}&graph=$graph&color=$cgi->{color}&silent=imagetagbig height=249 width=545 frameborder=0 marginwidth=0 marginheight=0 scrolling=no></iframe>\n";
+		print "     <iframe src='" . (split(',', $multihost->{remotehost_desc}->{$cgi->{val}}))[0] . (split(',', $multihost->{remotehost_desc}->{$cgi->{val}}))[2] . "/monitorix.cgi?mode=localhost&when=$cgi->{when}&graph=$graph&color=$cgi->{color}&silent=imagetagbig' height=249 width=545 frameborder=0 marginwidth=0 marginheight=0 scrolling=no></iframe>\n";
 		print "    </td>\n";
 		print "   </tr>\n";
 		print "   <tr>\n";
@@ -153,7 +157,7 @@ sub multihost {
 			print "   <td bgcolor='$colors->{title_bg_color}'>\n";
 			print "    <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
 			print "    <font size='-1'>\n";
-			print "    <b>&nbsp;&nbsp;<a href='" . $url[$cgi->{val}] . "' style='{color: " . $colors->{title_fg_color} . "}'>$url[$cgi->{val}]</a><b>\n";
+			print "    <b>&nbsp;&nbsp;<a href='" . $foot_url[$cgi->{val}] . "' style='color: " . $colors->{title_fg_color} . ";'>$foot_url[$cgi->{val}]</a></b>\n";
 			print "    </font></font>\n";
 			print "   </td>\n";
 		}
@@ -165,19 +169,27 @@ sub multihost {
 
 sub graph_header {
 	my ($title, $colspan) = @_;
-	print("\n");
-	print("  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors{graph_bg_color}' border='1'>\n");
-	print("    <tr>\n");
-	print("      <td bgcolor='$colors{title_bg_color}' colspan='$colspan'>\n");
-	print("        <font face='Verdana, sans-serif' color='$colors{title_fg_color}'>\n");
-	print("          <b>&nbsp;&nbsp;$title<b>\n");
-	print("        </font>\n");
-	print("      </td>\n");
-	print("    </tr>\n");
+	my @output;
+
+	push(@output, "\n");
+	push(@output, "<!-- graph table begins -->\n");
+	push(@output, "  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors{graph_bg_color}' border='1'>\n");
+	push(@output, "    <tr>\n");
+	push(@output, "      <td bgcolor='$colors{title_bg_color}' colspan='$colspan'>\n");
+	push(@output, "        <font face='Verdana, sans-serif' color='$colors{title_fg_color}'>\n");
+	push(@output, "          <b>&nbsp;&nbsp;$title</b>\n");
+	push(@output, "        </font>\n");
+	push(@output, "      </td>\n");
+	push(@output, "    </tr>\n");
+	return @output;
 }
 
 sub graph_footer {
-	print("  </table>\n");
+	my @output;
+
+	push(@output, "  </table>\n");
+	push(@output, "<!-- graph table ends -->\n");
+	return @output;
 }
 
 
@@ -191,38 +203,77 @@ close(IN);
 if(! -f $config_path) {
 	print(<< "EOF");
 Content-Type: text/plain
-
+<pre>
 FATAL: Monitorix is unable to continue!
 =======================================
 
-File 'monitorix.conf.path' not found.
+File 'monitorix.conf.path' was not found.
 
-Please make sure that 'base_dir' option is correctly configured and that
-this CGI is located in the 'base_dir'/cgi/ directory.
+Please make sure that 'base_dir' option is correctly configured and this
+CGI (monitorix.cgi) is located in the 'base_dir'/cgi/ directory.
 
-And don't forget to restart Monitorix for the changes to take effect.
+And don't forget to restart Monitorix for the changes to take effect!
 EOF
-	die "FATAL: File 'monitorix.conf.path' not found!";
+	die "FATAL: File 'monitorix.conf.path' was not found!";
 }
 
+# load main configuration file
 my $conf = new Config::General(
 	-ConfigFile => $config_path,
 );
 %config = $conf->getall;
 
-$config{url} = $ENV{HTTPS} ? "https://" . $ENV{HTTP_HOST} : "http://" . $ENV{HTTP_HOST};
-$config{hostname} = $config{hostname} || $ENV{SERVER_NAME};
-if(!($config{hostname})) {	# called from the command line
-	$config{hostname} = "127.0.0.1";
-	$config{url} = "http://127.0.0.1";
+# load additional configuration files
+if($config{include_dir} && opendir(DIR, $config{include_dir})) {
+	my @files = grep { !/^[.]/ } readdir(DIR);
+	closedir(DIR);
+	foreach my $c (sort @files) {
+		next unless -f $config{include_dir} . "/$c";
+		next unless $c =~ m/\.conf$/;
+		my $conf_inc = new Config::General(
+			-ConfigFile => $config{include_dir} . "/$c",
+		);
+		my %config_inc = $conf_inc->getall;
+		while(my ($key, $val) = each(%config_inc)) {
+			if(ref($val) eq "HASH") {
+				# two level options
+				while(my ($key2, $val2) = each(%{$val})) {
+					if(ref($val2) eq "HASH") {
+						# three level options
+						while(my ($key3, $val3) = each(%{$val2})) {
+							$config{$key}->{$key2}->{$key3} = $val3;
+							delete $config_inc{$key}->{$key2}->{$key3};
+						}
+						next;
+					}
+					$config{$key}->{$key2} = $val2;
+					delete $config_inc{$key}->{$key2};
+				}
+				next;
+			}
+			# graph_name option is special
+			if($key eq "graph_name") {
+				$config{graph_name} .= ", $val";
+				delete $config_inc{graph_name};
+				next;
+			}
+			# one level options
+			$config{$key} = $val;
+			delete $config_inc{$key};
+		}
+	}
+}
+
+$config{url} = ($config{url_prefix_proxy} || "");
+if(!$config{url}) {
+	$config{url} = ($ENV{HTTPS} || ($config{httpd_builtin}->{https_url} || "n") eq "y") ? "https://" . $ENV{HTTP_HOST} : "http://" . $ENV{HTTP_HOST};
+	$config{hostname} = $config{hostname} || $ENV{SERVER_NAME};
+	if(!($config{hostname})) {	# called from the command line
+		$config{hostname} = "127.0.0.1";
+		$config{url} = "http://127.0.0.1";
+	}
 }
 $config{url} .= $config{base_url};
-
-# get the current OS and kernel version
-my $release;
-($config{os}, undef, $release) = uname();
-my ($major, $minor) = split('\.', $release);
-$config{kernel} = $major . "." . $minor;
 
 our $mode = defined(param('mode')) ? param('mode') : '';
 our $graph = param('graph');
@@ -234,41 +285,78 @@ if($mode ne "localhost") {
 	($mode, $val)  = split(/\./, $mode);
 }
 
-if(lc($config{httpd_builtin}->{enabled} ne "y")) {
+# this should disarm all XSS and Cookie Injection attempts
+my $OK_CHARS='-a-zA-Z0-9_';	# a restrictive list of valid chars
+$graph =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+$mode =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+$when =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+$color =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+$val =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+$silent =~ s/[^$OK_CHARS]/_/go;	# only $OK_CHARS are allowed
+
+#$graph =~ s/\&/&amp;/g;
+#$graph =~ s/\</&lt;/g;
+#$graph =~ s/\>/&gt;/g;
+#$graph =~ s/\"/&quot;/g;
+#$graph =~ s/\'/&#x27;/g;
+#$graph =~ s/\(/&#x28;/g;
+#$graph =~ s/\)/&#x29;/g;
+#$graph =~ s/\//&#x2F;/g;
+
+if(lc($config{httpd_builtin}->{enabled}) ne "y") {
 	print("Content-Type: text/html\n");
 	print("\n");
 }
 
-# default white theme colors
+# get the current OS and kernel version
+my $release;
+($config{os}, undef, $release) = uname();
+if(!($release =~ m/^(\d+)\.(\d+)/)) {
+	die "FATAL: unable to get the kernel version.";
+}
+$config{kernel} = "$1.$2";
+
 $colors{graph_colors} = ();
 $colors{warning_color} = "--color=CANVAS#880000";
-$colors{bg_color} = "#FFFFFF";
-$colors{fg_color} = "#000000";
-$colors{title_bg_color} = "#777777";
-$colors{title_fg_color} = "#CCCC00";
-$colors{graph_bg_color} = "#CCCCCC";
 
-if($color) {
-	if($color eq "black") {
-		push(@{$colors{graph_colors}}, "--color=CANVAS#" . $config{$color}->{canvas});
-		push(@{$colors{graph_colors}}, "--color=BACK#" . $config{$color}->{back});
-		push(@{$colors{graph_colors}}, "--color=FONT#" . $config{$color}->{font});
-		push(@{$colors{graph_colors}}, "--color=MGRID#" . $config{$color}->{mgrid});
-		push(@{$colors{graph_colors}}, "--color=GRID#" . $config{$color}->{grid});
-		push(@{$colors{graph_colors}}, "--color=FRAME#" . $config{$color}->{frame});
-		push(@{$colors{graph_colors}}, "--color=ARROW#" . $config{$color}->{arrow});
-		push(@{$colors{graph_colors}}, "--color=SHADEA#" . $config{$color}->{shadea});
-		push(@{$colors{graph_colors}}, "--color=SHADEB#" . $config{$color}->{shadeb});
-		push(@{$colors{graph_colors}}, "--color=AXIS#" . $config{$color}->{axis}) if defined($config{$color}->{axis});
-		$colors{bg_color} = $config{$color}->{main_bg};
-		$colors{fg_color} = $config{$color}->{main_fg};
-		$colors{title_bg_color} = $config{$color}->{title_bg};
-		$colors{title_fg_color} = $config{$color}->{title_fg};
-		$colors{graph_bg_color} = $config{$color}->{graph_bg};
-	}
+# keep backwards compatibility for v3.2.1 and less
+if(ref($config{theme}) ne "HASH") {
+	delete($config{theme});
 }
 
-($tf{twhen}) = ($when =~ m/(hour|day|week|month|year)$/);
+if(!$config{theme}->{$color}) {
+	$color = "white";
+
+	$config{theme}->{$color}->{main_bg} = "FFFFFF";
+	$config{theme}->{$color}->{main_fg} = "000000";
+	$config{theme}->{$color}->{title_bg} = "777777";
+	$config{theme}->{$color}->{title_fg} = "CCCC00";
+	$config{theme}->{$color}->{graph_bg} = "CCCCCC";
+	$config{theme}->{$color}->{gap} = "000000";
+}
+
+if($color eq "black") {
+	push(@{$colors{graph_colors}}, "--color=CANVAS#" . $config{theme}->{$color}->{canvas});
+	push(@{$colors{graph_colors}}, "--color=BACK#" . $config{theme}->{$color}->{back});
+	push(@{$colors{graph_colors}}, "--color=FONT#" . $config{theme}->{$color}->{font});
+	push(@{$colors{graph_colors}}, "--color=MGRID#" . $config{theme}->{$color}->{mgrid});
+	push(@{$colors{graph_colors}}, "--color=GRID#" . $config{theme}->{$color}->{grid});
+	push(@{$colors{graph_colors}}, "--color=FRAME#" . $config{theme}->{$color}->{frame});
+	push(@{$colors{graph_colors}}, "--color=ARROW#" . $config{theme}->{$color}->{arrow});
+	push(@{$colors{graph_colors}}, "--color=SHADEA#" . $config{theme}->{$color}->{shadea});
+	push(@{$colors{graph_colors}}, "--color=SHADEB#" . $config{theme}->{$color}->{shadeb});
+	push(@{$colors{graph_colors}}, "--color=AXIS#" . $config{theme}->{$color}->{axis})
+		if defined($config{theme}->{$color}->{axis});
+}
+$colors{bg_color} = $config{theme}->{$color}->{main_bg};
+$colors{fg_color} = $config{theme}->{$color}->{main_fg};
+$colors{title_bg_color} = $config{theme}->{$color}->{title_bg};
+$colors{title_fg_color} = $config{theme}->{$color}->{title_fg};
+$colors{graph_bg_color} = $config{theme}->{$color}->{graph_bg};
+$colors{gap} = $config{theme}->{$color}->{gap};
+
+
+($tf{twhen}) = ($when =~ m/^\d+(hour|day|week|month|year)$/);
 ($tf{nwhen} = $when) =~ s/$tf{twhen}// unless !$tf{twhen};
 $tf{nwhen} = 1 unless $tf{nwhen};
 $tf{twhen} = "day" unless $tf{twhen};
@@ -277,6 +365,14 @@ $tf{when} = $tf{nwhen} . $tf{twhen};
 # toggle this to 1 if you want to maintain old (2.3-) Monitorix with Multihost
 if($config{backwards_compat_old_multihost}) {
 	$tf{when} = $tf{twhen};
+}
+
+# make sure that some options are correctly defined
+if(!$config{global_zoom}) {
+	$config{global_zoom} = 1;
+}
+if(!$config{image_format}) {
+	$config{image_format} = "PNG";
 }
 
 our ($res, $tc, $tb, $ts);
@@ -317,6 +413,38 @@ if(!$silent) {
 	my $title;
 	my $str;
 
+	my $piwik_code = "";
+	my ($piwik_url, $piwik_sid, $piwik_img);
+
+	# Piwik tracking code
+	if(lc($config{piwik_tracking}->{enabled}) eq "y") {
+		$piwik_url = $config{piwik_tracking}->{url} || "";
+	        $piwik_sid = $config{piwik_tracking}->{sid} || "";
+		$piwik_img = $config{piwik_tracking}->{img} || "";
+		$piwik_code = <<"EOF";
+
+<!-- Piwik -->
+  <script type="text/javascript">
+     var _paq = _paq || [];
+     _paq.push(['trackPageView']);
+     _paq.push(['enableLinkTracking']);
+     (function() {
+       var u=(("https:" == document.location.protocol) ? "https" : "http") + "$piwik_url";
+       _paq.push(['setTrackerUrl', u+'piwik.php']);
+       _paq.push(['setSiteId', $piwik_sid]);
+       var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0]; g.type='text/javascript';
+       g.defer=true; g.async=true; g.src=u+'piwik.js';
+       s.parentNode.insertBefore(g,s);
+     })();
+  </script>
+  <noscript>
+    <p><img src="$piwik_img" style="border:0;" alt=""/></p>
+  </noscript>
+<!-- End Piwik Code -->
+EOF
+	}
+
+	print("<!DOCTYPE html '-//W3C//DTD HTML 4.01 Final//EN'>\n");
 	print("<html>\n");
 	print("  <head>\n");
 	print("    <title>$config{title}</title>\n");
@@ -326,14 +454,19 @@ if(!$silent) {
 	}
 	print("  </head>\n");
 	print("  <body bgcolor='" . $colors{bg_color} . "' vlink='#888888' link='#888888'>\n");
+	print("  $piwik_code\n");
 	print("  <center>\n");
 	print("  <table cellspacing='5' cellpadding='0' bgcolor='" . $colors{graph_bg_color} . "' border='1'>\n");
 	print("  <tr>\n");
 
+	if(lc($config{enable_back_button} || "") eq "y") {
+		print("  <span style='color:#888888;position:fixed;left:1em;font-size:32px;letter-spacing:-1px;'><a href='javascript:history.back()' style='text-decoration:none;'>&#9664;</a>\n");
+	}
+
 	if(($val ne "all" || $val ne "group") && $mode ne "multihost") {
 		print("  <td bgcolor='" . $colors{title_bg_color} . "'>\n");
 		print("  <font face='Verdana, sans-serif' color='" . $colors{title_fg_color} . "'>\n");
-		print("    <font size='5'><b>&nbsp;&nbsp;Host:&nbsp;<b></font>\n");
+		print("    <font size='5'><b>&nbsp;&nbsp;Host:&nbsp;</b></font>\n");
 		print("  </font>\n");
 		print("  </td>\n");
 	}
@@ -344,7 +477,7 @@ if(!$silent) {
 		$gname = trim($gname);
 		print("  <td bgcolor='" . $colors{title_bg_color} . "'>\n");
 		print("  <font face='Verdana, sans-serif' color='" . $colors{title_fg_color} . "'>\n");
-		print("    <font size='5'><b>&nbsp;&nbsp;$gname&nbsp;<b></font>\n");
+		print("    <font size='5'><b>&nbsp;&nbsp;$gname&nbsp;</b></font>\n");
 		print("  </font>\n");
 		print("  </td>\n");
 	}
@@ -355,34 +488,33 @@ if(!$silent) {
 		$title = $config{hostname};
 	} elsif($mode eq "multihost") {
 		$graph = $graph eq "all" ? "_system1" : $graph;
-		if(substr($graph, 0, 4) eq "_net") {
-			$str = "_net" . substr($graph, 5, 1);
-			$title = $config{graphs}->{$str};
-		} elsif(substr($graph, 0, 5) eq "_port") {
-			$str = substr($graph, 0, 5);
-			my $p = substr($graph, 5, 1);
-			$title = $config{graphs}->{$str};
-			$p = (split(',', $config{port_list}))[$p];
-			$title .= " " . trim($p);
-			$p = (split(',', $config{port_desc}->{$p}))[0];
-			$title .= " (" . trim($p) . ")";
+		my ($g1, $g2) = ($graph =~ /(_\D+).*?(\d)$/);
+		if($g1 eq "_port") {
+			$title = $config{graphs}->{$g1};
+			$g2 = trim((split(',', $config{port}->{list}))[$g2]);
+			$title .= " " . $g2;
+			$g2 = (split(',', $config{port}->{desc}->{$g2}))[0];
+			$title .= " (" . trim($g2) . ")";
 		} else {
-			$title = $config{graphs}->{$graph};
+			$g2 = "" if $g1 eq "_proc";	# '_procn' must be converted to '_proc'
+			$title = $config{graphs}->{$g1 . $g2};
 		}
 	}
 	$title =~ s/ /&nbsp;/g;
+	my $twhen = $tf{nwhen} > 1 ? "$tf{nwhen} $tf{twhen}" : $tf{twhen};
+	$twhen .= "s" if $tf{nwhen} > 1;
 	print("    <font size='5'><b>&nbsp;&nbsp;$title&nbsp;&nbsp;</b></font>\n");
 	print("  </font>\n");
 	print("  </td>\n");
 		print("  <td bgcolor='" . $colors{title_bg_color} . "'>\n");
 		print("  <font face='Verdana, sans-serif' color='" . $colors{title_fg_color} . "'>\n");
-		print("    <font size='5'><b>&nbsp;&nbsp;last&nbsp;$tf{twhen}&nbsp;&nbsp;<b></font>\n");
+		print("    <font size='5'><b>&nbsp;&nbsp;last&nbsp;$twhen&nbsp;&nbsp;</b></font>\n");
 		print("  </font>\n");
 		print("  </td>\n");
 	print("  </tr>\n");
 	print("  </table>\n");
 	print("  <font face='Verdana, sans-serif' color='" . $colors{fg_color} . "'>\n");
-	print("    <h4><font color='#888888'>" . strftime("%a %b %e %H:%M:%S %Z %Y", localtime) . "</font></h4>\n");
+	print encode('utf-8', "    <h4><font color='#888888'>" . strftime("%a %b %e %H:%M:%S %Z %Y", localtime) . "</font></h4>\n");
 }
 
 
@@ -397,29 +529,94 @@ $cgi{val} = $val;
 $cgi{silent} = $silent;
 
 if($mode eq "localhost") {
-	foreach (split(',', $config{graph_name})) {
-		my $g = trim($_);
-		if(lc($config{graph_enable}->{$g}) eq "y") {
-			my $cgi = $g . "_cgi";
+	my %outputs;	# a hash of arrays
+	my @readers;	# array of file descriptors
+	my @writers;	# array of file descriptors
+	my $children = 0;
 
-			eval "use $g qw(" . $cgi . ")";
+	foreach (split(',', $config{graph_name})) {
+		my $gn = trim($_);
+		my $g = "";
+		if($graph ne "all") {
+			($g) = ($graph =~ m/^_*($gn)\d*$/);
+			next unless $g;
+		}
+		if(lc($config{graph_enable}->{$gn}) eq "y") {
+			my $cgi = $gn . "_cgi";
+
+			eval "use $gn qw(" . $cgi . ")";
 			if($@) {
-				print(STDERR "WARNING: unable to find module '$g'\n");
+				print(STDERR "WARNING: unable to load module '$gn. $@'\n");
 				next;
 			}
 
-			if($graph eq "all" || $graph =~ /_$g/) {
+			if($graph eq "all" || $gn eq $g) {
 				no strict "refs";
-				&$cgi($g, \%config, \%cgi);
+
+				if(lc($config{enable_parallelizing} || "") eq "y") {
+					pipe($readers[$children], $writers[$children]);
+					$writers[$children]->autoflush(1);
+
+					if(!fork()) {
+						my $child;
+
+						close($readers[$children]);
+
+						pipe(CHILD_RDR, PARENT_WTR);
+						PARENT_WTR->autoflush(1);
+
+						if(!($child = fork())) {
+							# child
+							my @output;
+							close(CHILD_RDR);
+							@output = &$cgi($gn, \%config, \%cgi);
+							print(PARENT_WTR @output);
+							close(PARENT_WTR);
+							exit(0);
+						}
+
+						# parent
+						my @output;
+						close(PARENT_WTR);
+						@output = <CHILD_RDR>;
+						close(CHILD_RDR);
+						waitpid($child, 0);
+						my $fd = $writers[$children];
+						print($fd @output);
+						close($writers[$children]);
+						exit(0);
+					}
+					close($writers[$children]);
+					$children++;
+
+				} else {
+					my @output = &$cgi($gn, \%config, \%cgi);
+					print @output;
+				}
 			}
 		}
 	}
+	if(lc($config{enable_parallelizing} || "") eq "y") {
+		my $n;
+		my @output;
+
+		for($n = 0; $n < $children; $n++) {
+			my $fd = $readers[$n];
+			@output = <$fd>;
+			close($readers[$n]);
+			@{$outputs{$n}} = @output;
+			waitpid(-1, 0);	# wait for each child
+			print @{$outputs{$n}} if $outputs{$n};
+		}
+	}
+
 } elsif($mode eq "multihost") {
 	multihost(\%config, \%colors, \%cgi);
+
 } elsif($mode eq "traffacct") {
 	eval "use $mode qw(traffacct_cgi)";
 	if($@) {
-		print(STDERR "WARNING: unable to find module '$mode'\n");
+		print(STDERR "WARNING: unable to load module '$mode'. $@\n");
 		exit;
 	}
 	traffacct_cgi($mode, \%config, \%cgi);
@@ -429,14 +626,16 @@ if(!$silent) {
 	print("\n");
 	print("  </font>\n");
 	print("  </center>\n");
+	print("<!-- footer begins -->\n");
 	print("  <p>\n");
 	print("  <a href='http://www.monitorix.org'><img src='" . $config{url} . "/" . $config{logo_bottom} . "' border='0'></a>\n");
 	print("  <br>\n");
 	print("  <font face='Verdana, sans-serif' color='" . $colors{fg_color} . "' size='-2'>\n");
-	print("Copyright &copy; 2005-2013 Jordi Sanfeliu\n");
+	print("Copyright &copy; 2005-2017 Jordi Sanfeliu\n");
 	print("  </font>\n");
 	print("  </body>\n");
 	print("</html>\n");
+	print("<!-- footer ends -->\n");
 }
 
 0;

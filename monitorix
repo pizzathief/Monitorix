@@ -2,7 +2,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -27,7 +27,6 @@ use FindBin qw($Bin);
 use lib $Bin . "/lib", "/usr/lib/monitorix";
 
 use Monitorix;
-use HTTPServer;
 use POSIX qw(WNOHANG LC_TIME setlocale uname pause setsid);
 use Config::General;
 use Getopt::Std;
@@ -45,10 +44,9 @@ $SIG{'STOP'} = 'INT_handler';
 $SIG{'TERM'} = 'INT_handler';
 $SIG{'CHLD'} = 'CHLD_handler';
 $SIG{'HUP' } = 'HUP_handler';
-$SIG{'ALRM'} = 'ALRM_handler';
 
-use constant VERSION	=> "3.2.0";
-use constant RELDATE	=> "13-May-2013";
+use constant VERSION	=> "3.10.0";
+use constant RELDATE	=> "25-Sep-2017";
 
 my @suppsys = ("Linux", "FreeBSD", "OpenBSD", "NetBSD");
 our %config;
@@ -59,7 +57,7 @@ sub INT_handler {
 
 	logger("SIG$signal caught.");
 	flush_accounting_rules(\%config, $options{d});
-	if(lc($config{httpd_builtin}->{enabled} eq "y")) {
+	if(lc($config{httpd_builtin}->{enabled}) eq "y") {
 		kill(15, $config{httpd_pid});
 	}
 	logger("Exiting.");
@@ -79,71 +77,22 @@ sub HUP_handler {
 
 	logger("SIG$signal caught.");
 
-	# upon receiving a SIGHUP signal the logfile is re-opened
+	# upon receiving SIGHUP a new logfile is opened
 	close(STDOUT);
 	close(STDERR);
 	open(STDOUT, ">> $config{log_file}") || logger("Can't write to LOG: $!");
 	open(STDERR, ">> $config{log_file}") || logger("Can't write to LOG: $!");
-	logger("$myself: reopening log file.");
+	chmod(0600, $config{log_file});
+	logger("$myself: opening a new log file.");
 
 	# create the HTTPd logfile
 	open(OUT, "> " . $config{httpd_builtin}->{log_file});
 	close(OUT);
 	chown($uid, $gid, $config{httpd_builtin}->{log_file});
-}
-
-sub ALRM_handler {
-	my $myself = (caller(0))[3];
-	my ($sec, $min, $hour, $mday) = localtime(time);
-
-	# call all enabled graphs on every minute
-	if($sec == 0) {
-		foreach my $f (@{$config{func_update}}) {
-			my $update = $f . "_update";
-			my $d = $f;
-			logger("$myself: calling $update()") unless !$options{d};
-
-			undef($d) if(!grep {trim($_) eq $d} (@{$config{debug}}));
-			if(defined($options{d}) && $options{d} eq "all") {
-				$d = $f;
-			}
-
-			{
-				no strict "refs";
-				eval { &$update($f, \%config, $d); };
-				if($@) {
-					logger("$myself: $update(): $@");
-				}
-			}
-		}
-		if(lc($config{traffacct}->{enabled}) eq "y" && lc($config{traffacct}->{reports}->{enabled}) eq "y") {
-			my $d = "traffacct";
-			undef($d) if(!grep {trim($_) eq $d} (@{$config{debug}}));
-
-			# at 00:00h
-			if($min == 0 && $hour == 0) {
-
-				# collect traffic accounting every day
-				eval { traffacct::traffacct_getcounters(\%config, $d); };
-				if($@) {
-					logger("$myself: traffacct::traffacct_getcounters(): $@");
-				}
-
-				# send reports every first day of a month
-				if($mday == 1) {
-					eval { traffacct::traffacct_sendreports(\%config, $d); };
-					if($@) {
-						logger("$myself: traffacct::traffacct_sendreports(): $@");
-					}
-				}
-			}
-		}
-	}
-	alarm(1);
+	chmod(0600, $config{httpd_builtin}->{log_file});
 }
 
 sub daemonize {
-	chdir("/") || die "Can't chdir to /: $!";
 	open(STDIN, "< /dev/null") || die "Can't read /dev/null: $!";
 	open(STDOUT, ">> $config{log_file}") || die "Can't write to LOG: $!";
 	umask(022) || die "Unable to umask 022: $!";
@@ -154,7 +103,7 @@ sub daemonize {
 
 sub usage {
 	print(STDERR << "EOF");
-Usage: monitorix -c configfile [-p pidfile] [-d none | graph[,graph] | all ] [-v]
+Usage: monitorix -c configfile [-p pidfile] [-d none | graph[,graph] | all ] [-v] [-n]
 
 EOF
 	exit(1);
@@ -165,41 +114,82 @@ sub create_index {
 
 	my $n;
 	my $gname;
-	my $theme = $config{theme};
 	my $bgcolor;
 	my $table_back_color;
 	my $title_back_color;
 	my $title_fore_color;
+	my $piwik_code = "";
+	my ($piwik_url, $piwik_sid, $piwik_img);
+
+	# keep backwards compatibility for v3.2.1 and less
+	if(ref($config{theme}) ne "HASH") {
+		logger("$myself: WARNING: the <theme> option is not valid. Please consider upgrading your configuration file. Defaulting to white theme.");
+		delete($config{theme});
+		$config{theme}->{white}->{main_bg} = "FFFFFF";
+		$config{theme}->{white}->{main_fg} = "000000";
+		$config{theme}->{white}->{title_bg} = "777777";
+		$config{theme}->{white}->{title_fg} = "CCCC00";
+		$config{theme}->{white}->{graph_bg} = "CCCCCC";
+		$config{theme_color} = "white";
+	}
+
+	my $theme = $config{theme_color} || "white";
+	if(!$config{theme}->{$theme}) {
+		logger("$myself: ERROR: invalid value in 'theme_color' option. Defaulting to white theme.");
+		$theme = $config{theme_color} = "white";
+	}
+
+	if($config{theme}->{$theme}) {
+		$bgcolor = $config{theme}->{$theme}->{main_bg};
+		$table_back_color = $config{theme}->{$theme}->{graph_bg};
+		$title_back_color = $config{theme}->{$theme}->{title_bg};
+		$title_fore_color = $config{theme}->{$theme}->{title_fg};
+	}
+
+	# Piwik tracking code
+	if(lc($config{piwik_tracking}->{enabled} || "") eq "y") {
+		$piwik_url = $config{piwik_tracking}->{url} || "";
+		$piwik_sid = $config{piwik_tracking}->{sid} || "";
+		$piwik_img = $config{piwik_tracking}->{img} || "";
+		$piwik_code = <<"EOF";
+
+<!-- Piwik -->
+ <script type="text/javascript">
+    var _paq = _paq || [];
+    _paq.push(['trackPageView']);
+    _paq.push(['enableLinkTracking']);
+    (function() {
+      var u=(("https:" == document.location.protocol) ? "https" : "http") + "$piwik_url";
+      _paq.push(['setTrackerUrl', u+'piwik.php']);
+      _paq.push(['setSiteId', $piwik_sid]);
+      var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0]; g.type='text/javascript';
+      g.defer=true; g.async=true; g.src=u+'piwik.js';
+      s.parentNode.insertBefore(g,s);
+    })();
+ </script>
+ <noscript>
+   <p><img src="$piwik_img" style="border:0;" alt=""/></p>
+ </noscript>
+<!-- End Piwik Code -->
+EOF
+	}
 
 	# force to only one trailing slash
 	(my $base_url = $config{base_url}) =~ s/\/*$/\//;
 	(my $base_cgi = $config{base_cgi}) =~ s/\/*$/\//;
 
-	if($theme eq "black") {
-		$bgcolor = $config{$theme}->{main_bg};
-		$table_back_color = $config{$theme}->{graph_bg};
-		$title_back_color = $config{$theme}->{title_bg};
-		$title_fore_color = $config{$theme}->{title_fg};
-	} elsif(!$theme || $theme eq "white") {
-		$bgcolor = "#ffffff";
-		$table_back_color = "#CCCCCC";
-		$title_back_color = "#777777";
-		$title_fore_color = "#CCCC00";
-	} else {
-		logger("$myself: ERROR: invalid value in 'theme' option") unless !$options{d};
-	}
-
 	if(!open(OUT, "> $config{base_dir}/index.html")) {
 		die "unable to create '${config{base_dir}}index.html': $!";
 	}
 	print(OUT <<EOF);
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<!DOCTYPE html "-//W3C//DTD HTML 4.01 Final//EN">
 <html>
  <head>
   <title>$config{title}</title>
   <link rel="shortcut icon" href="$base_url$config{favicon}">
  </head>
  <body bgcolor="$bgcolor" text="#888888" vlink="#888888" link="#888888">
+  $piwik_code
   <center>
   <p>
   <br>
@@ -207,7 +197,7 @@ sub create_index {
   <table>
     <tr>
       <td>
-        <a href="http://www.monitorix.org/"><img src="$base_url$config{logo_top}" border="0"></a>
+        <a href="$config{logo_top_url}"><img src="$base_url$config{logo_top}" border="0"></a>
       </td>
     </tr>
     <tr>
@@ -240,7 +230,7 @@ EOF
 	print(OUT "            <option value='localhost'>localhost</option>\n");
 	print(OUT "            </optgroup>\n");
 
-	if(scalar(my @remotehost_list = split(',', $config{multihost}->{remotehost_list})) && lc($config{multihost}->{enabled}) eq "y") {
+	if(scalar(my @remotehost_list = split(',', $config{multihost}->{remotehost_list})) && lc($config{multihost}->{enabled} || "") eq "y") {
 		print(OUT "            <optgroup label='Multihost'>\n");
 		print(OUT "            <option value='multihost.all'>All</option>\n");
 		for($n = 0; $n < scalar(@remotehost_list); $n++) {
@@ -259,7 +249,7 @@ EOF
 		}
 	}
 
-	if(scalar(my @tal = split(',', $config{traffacct}->{list})) && lc($config{traffacct}->{enabled}) eq "y") {
+	if(scalar(my @tal = split(',', $config{traffacct}->{list})) && lc($config{traffacct}->{enabled} || "") eq "y") {
 		print(OUT "            <optgroup label='Traffic Accounting'>\n");
 		print(OUT "              <option value='traffacct.all'>All</option>\n");
 		for($n = 0; $n < scalar(@tal); $n++) {
@@ -286,7 +276,23 @@ EOF
 				}
 				next;
 			}
-			if($g eq "fs") {
+			if($g eq "ipmi") {
+				for($n = 0; $n < scalar(my @ipmi_list = split(',', $config{ipmi}->{list})); $n++) {
+					my $name = trim($ipmi_list[$n]);
+					$gname = "_" . $g;
+					print(OUT "              <option value='" . $gname . $n . "'>" . $name . "</option>\n");
+				}
+				next;
+			}
+			if($g eq "ambsens") {
+				for($n = 0; $n < scalar(my @ambsens_list = split(',', $config{ambsens}->{list})); $n++) {
+					my $name = trim($ambsens_list[$n]);
+					$gname = "_" . $g;
+					print(OUT "              <option value='" . $gname . $n . "'>" . $name . "</option>\n");
+				}
+				next;
+			}
+			if($g eq "fs" || $g eq "process") {
 				$n = 0;
 				foreach my $k (sort keys %{$config{graphs}}) {
 					if($k =~ m/$g/) {
@@ -296,6 +302,14 @@ EOF
 							print(OUT "              <option value='" . $gname2 ."'>" . $config{graphs}->{$gname} . "</option>\n");
 						}
 					}
+				}
+				next;
+			}
+			if($g eq "du") {
+				for($n = 0; $n < scalar(my @du_list = split(',', $config{du}->{list})); $n++) {
+					my $name = trim($du_list[$n]);
+					$gname = "_" . $g;
+					print(OUT "              <option value='" . $gname . $n . "'>" . $name . "</option>\n");
 				}
 				next;
 			}
@@ -313,6 +327,10 @@ EOF
 			if($g eq "port") {
 				for($n = 0; $n < $config{port}->{max} && $n < scalar(my @port_list = split(',', $config{port}->{list})); $n++) {
 					my $num = trim($port_list[$n]);
+					if(!$config{port}->{desc}->{$num}) {
+						logger("$myself: port number '$num' listed but not defined.");
+						next;
+					}
 					my $name = trim((split(',', $config{port}->{desc}->{$num}))[0]);
 					my $pcon = trim((split(',', $config{port}->{desc}->{$num}))[2]);
 					$gname = "_" . $g;
@@ -353,23 +371,69 @@ EOF
     <p>
     <table cellspacing="5" cellpadding="0" bgcolor="$table_back_color" border="1">
      <tr>
+EOF
+
+	if(lc($config{enable_hourly_view} || "") eq "y" ) {
+		print(OUT <<EOF);
         <td bgcolor="$title_back_color">
-          <input type="radio" checked name="when" value="1day">
-            <font color="$title_fore_color"><b>Daily&nbsp;</b></font>
+       	    <label>
+		<input type="radio" name="when" value="1hour">
+		<font color="$title_fore_color"><b>Hourly&nbsp;</b></font>
+	    </label>
+        </td>
+EOF
+	}
+
+	print(OUT <<EOF);
+        <td bgcolor="$title_back_color">
+	    <label>
+          	<input type="radio" checked name="when" value="1day">
+            	<font color="$title_fore_color"><b>Daily&nbsp;</b></font>
+	    </label>
         </td>
         <td bgcolor="$title_back_color">
-          <input type="radio" name="when" value="1week">
-            <font color="$title_fore_color"><b>Weekly&nbsp;</b></font>
+       	    <label>
+          	<input type="radio" name="when" value="1week">
+            	<font color="$title_fore_color"><b>Weekly&nbsp;</b></font>
+	    </label>
         </td>
         <td bgcolor="$title_back_color">
-          <input type="radio" name="when" value="1month">
-            <font color="$title_fore_color"><b>Monthly&nbsp;</b></font>
+       	    <label>
+          	<input type="radio" name="when" value="1month">
+            	<font color="$title_fore_color"><b>Monthly&nbsp;</b></font>
+	    </label>
         </td>
         <td bgcolor="$title_back_color">
-          <input type="radio" name="when" value="1year">
-            <font color="$title_fore_color"><b>Yearly&nbsp;</b></font>
+       	    <label>
+          	<input type="radio" name="when" value="1year">
+            	<font color="$title_fore_color"><b>Yearly&nbsp;</b></font>
+	    </label>
         </td>
       </tr>
+EOF
+
+	if($config{max_historic_years} > 1) {
+		print(OUT "      <tr>\n");
+	}
+	for($n = 2; $n <= $config{max_historic_years}; $n++) {
+		if($n > 2 && (($n - 2) % 4) == 0) {
+			print(OUT "      </tr>\n");
+			print(OUT "      <tr>\n");
+		}
+		print(OUT <<EOF);
+        <td bgcolor="$title_back_color">
+       	    <label>
+          	<input type="radio" name="when" value="${n}year">
+            	<font color="$title_fore_color"><b>$n Years&nbsp;</b></font>
+	    </label>
+        </td>
+EOF
+	}
+	if($config{max_historic_years} > 1) {
+		print(OUT "      </tr>\n");
+	}
+
+	print(OUT <<EOF);
     </table>
     <p>
     <input type="hidden" name="color" value="$theme">
@@ -386,7 +450,7 @@ EOF
 
 # Main
 # ----------------------------------------------------------------------------
-getopts("d:vc:p:", \%options) || usage();
+getopts("c:p:d:vn", \%options) || usage();
 
 if($options{v}) {
 	print("Monitorix version " . VERSION . " (" . RELDATE . ")\n");
@@ -403,7 +467,7 @@ if(!stat($options{c})) {
 	die "can't open file '$options{c}': $!";
 }
 
-# load configuration file
+# load main configuration file
 my $conf = new Config::General(
 	-ConfigFile => $options{c},
 );
@@ -414,9 +478,11 @@ $config{func_update} = ();
 # get the current OS and kernel version and check its support
 my $release;
 ($config{os}, undef, $release) = uname();
-my ($major, $minor) = split('\.', $release);
-$minor =~ m/^(\d+)/;
-$config{kernel} = $major . "." . $1;
+if(!($release =~ m/^(\d+)\.(\d+)/)) {
+        die "FATAL: unable to get the kernel version.";
+}
+$config{kernel} = "$1.$2";
+
 if(!grep {$_ eq $config{os}} @suppsys) {
 	die "FATAL: your operating system ($config{os}) is not supported.";
 }
@@ -425,16 +491,19 @@ if(grep {$_ eq $config{os}} ("FreeBSD", "OpenBSD", "NetBSD")) {
 	$SIG{'CHLD'} = 'DEFAULT';
 }	
 
-$0 = sprintf("%s %s%s%s%s",
+$0 = sprintf("%s %s%s%s%s%s",
 	$^V lt 5.6.2 ? "monitorix" : abs_path($0),
 	$options{c} ? "-c $options{c}" : "",
 	$options{p} ? " -p $options{p}" : "",
 	$options{d} ? " -d $options{d}" : "",
-	$options{v} ? " -v" : "");
+	$options{v} ? " -v" : "",
+	$options{n} ? " -n" : "");
 
-daemonize();
+daemonize() unless $options{n};
 logger("Starting Monitorix version " . VERSION . " (pid $$).");
+logger("Loaded main configuration file '$options{c}'.");
 
+# save the pidfile
 if($options{p}) {
 	$options{p} = abs_path($options{p});
 	open(OUT, "> $options{p}")
@@ -452,7 +521,7 @@ if($options{d}) {
 	if($options{d} ne "none" && $options{d} ne "all") {
 		@{$config{debug}} = split(',', $options{d});
 		foreach my $t (@{$config{debug}}) {
-			if(!grep {trim($_) eq $t} (split(',', $config{graph_name} . ", traffacct"))) {
+			if(!grep {trim($_) eq $t} (split(',', $config{graph_name} . ", traffacct, emailreports"))) {
 				die "Invalid debug key '$t'";
 			}
 		}
@@ -461,25 +530,108 @@ if($options{d}) {
 	logger("Changed process name to '$0'.");
 }
 
+# load additional configuration files
+if($config{include_dir} && opendir(DIR, $config{include_dir})) {
+	my @files = grep { !/^[.]/ } readdir(DIR);
+	closedir(DIR);
+	foreach my $c (sort @files) {
+		next unless -f $config{include_dir} . "/$c";
+		next unless $c =~ m/\.conf$/;
+		logger("Loading extra configuration file '$config{include_dir}/$c'.");
+		my $conf_inc = new Config::General(
+			-ConfigFile => $config{include_dir} . "/$c",
+		);
+		my %config_inc = $conf_inc->getall;
+		while(my ($key, $val) = each(%config_inc)) {
+			if(ref($val) eq "HASH") {
+				# two level options
+				while(my ($key2, $val2) = each(%{$val})) {
+					if(ref($val2) eq "HASH") {
+						# three level options
+						while(my ($key3, $val3) = each(%{$val2})) {
+							$config{$key}->{$key2}->{$key3} = $val3;
+							delete $config_inc{$key}->{$key2}->{$key3};
+						}
+						next;
+					}
+					$config{$key}->{$key2} = $val2;
+					delete $config_inc{$key}->{$key2};
+				}
+				next;
+			}
+			# graph_name option is special
+			if($key eq "graph_name") {
+				$config{graph_name} .= ", $val";
+				delete $config_inc{graph_name};
+				next;
+			}
+			# one level options
+			$config{$key} = $val;
+			delete $config_inc{$key};
+		}
+	}
+} else {
+	logger("Can't read directory '$config{include_dir}'. $!")
+		if $config{include_dir};
+}
+
 # save the path of the configuration file
 if(open(OUT, "> " . $config{base_dir} . "/cgi/monitorix.conf.path")) {
 	print(OUT "$options{c}\n");
 	close(OUT);
 } else {
-	logger("Unable to create the file '$config{base_dir}/cgi/monitorix.conf.path'.");
+	logger("WARNING: unable to create the file '$config{base_dir}/cgi/monitorix.conf.path'. $!");
 }
 
+if($config{os} eq "Linux") {
+	# make sure that 'ip_default_table' option has a consistent value
+	$config{ip_default_table} = "filter" if !$config{ip_default_table};
+
+	# check 'iptables' version to include the new wait lock option '--wait'
+	my $ipv = `iptables --version`;
+	chomp($ipv);
+	$ipv =~ s/^iptables v//;
+	$ipv = sprintf("%03s.%03s.%03s", split('\.', $ipv));
+	if($ipv gt "001.004.020") {       # 1.4.20
+		$config{iptables_wait_lock} = " --wait ";
+	} else {
+		$config{iptables_wait_lock} = "";
+	}
+}
+
+# make sure that some options are correctly defined
+if(!$config{max_historic_years}) {
+	logger("WARNING: the 'max_historic_years' option doesn't exist. Please consider upgrading your configuration file.");
+	$config{max_historic_years} = 1;
+}
+if(!$config{net}->{max}) {
+	logger("WARNING: the 'max' option in 'net.pm' doesn't exist. Please consider upgrading your configuration file.");
+	$config{net}->{max} = 10;
+}
+
+# make sure that there aren't residual Monitorix iptables rules
 flush_accounting_rules(\%config, $options{d});
 
-logger("Initializing graphs.") unless !$options{d};
+logger("Initializing graphs.");
+
+# check for inconsistencies between enabled graphs and defined graphs
+foreach my $g (sort keys %{$config{graph_enable}}) {
+	if(lc($config{graph_enable}->{$g} || "") eq "y") {
+		if(!grep {trim($_) eq $g} (split(',', $config{graph_name}))) {
+			logger("WARNING: inconsitency between '<graph_enable>' and 'graph_name' options; '$g' doesn't exist.");
+		}
+	}
+}
+
+# initialize all enabled graphs
 foreach (split(',', $config{graph_name} . ", traffacct")) {
 	my $g = trim($_);
 	my $e = "n";
 
 	if($g eq "traffacct") {
-		$e = lc($config{$g}->{enabled});
+		$e = lc($config{$g}->{enabled} || "");
 	} else {
-		$e = lc($config{graph_enable}->{$g});
+		$e = lc($config{graph_enable}->{$g} || "");
 	}
 
 	if($e eq "y") {
@@ -493,33 +645,159 @@ foreach (split(',', $config{graph_name} . ", traffacct")) {
 
 		eval "use $g qw(" . $init . " " . $g . "_update)";
 		if($@) {
-			logger("WARNING: unable to find module '$g'");
+			logger("WARNING: unable to load module '$g'. $@");
 			next;
 		}
 		{
 			no strict "refs";
 			eval { &$init($g, \%config, $d); };
 		}
-		logger("WARNING: unexpected errors in function $init()") if($@);
+		logger("WARNING: unexpected errors in function $init().") if($@);
 	}
 }
 
 if(!scalar($config{func_update})) {
-	logger("nothing to do, exiting.");
+	logger("Nothing to do, exiting.");
 	exit(0);
 }
 
-logger("Generating the 'index.html' file.") unless !$options{d};
+logger("Generating the 'index.html' file.");
+if(!defined($config{logo_top_url})) {
+	logger("WARNING: the 'logo_top_url' option doesn't exist. Please consider upgrading your configuration file.");
+	$config{logo_top_url} = "http://www.monitorix.org/";
+}
 create_index();
 
-if(lc($config{httpd_builtin}->{enabled} eq "y")) {
+# start the HTTP built-in (if enabled)
+if(lc($config{httpd_builtin}->{enabled}) eq "y") {
+	require HTTPServer;
 	httpd_setup(\%config, $options{d});
-	logger("Built-in HTTP server pid is '$config{httpd_pid}'.") if (defined($config{httpd_pid}));
+	logger("Started built-in HTTP server (pid $config{httpd_pid}).") if (defined($config{httpd_pid}));
 }
 
-logger("Ok, done.") unless !$options{d};
+# make sure that some options are correctly defined
+if(!$config{global_zoom}) {
+	logger("WARNING: the 'global_zoom' option is not valid or doesn't exist. Please consider upgrading your configuration file.");
+	# it's set in 'monitorix.cgi'
+}
+if(!$config{image_format}) {
+	logger("WARNING: the 'image_format' option is not valid or doesn't exist. Please consider upgrading your configuration file.");
+	# it's set in 'monitorix.cgi'
+}
 
-alarm(1);
+
+setpriority(0, 0, $config{priority} || 0);
+logger("Ok, ready.");
+
+# main loop
 while(1) {
-        pause();
+	local $SIG{'ALRM'} = sub { };
+	alarm(1);
+	pause();
+
+	my ($sec, $min, $hour, $mday, $mon, undef, $wday) = localtime(time);
+
+	# call to all enabled graphs on every minute
+	if($sec == 0) {
+		foreach my $f (@{$config{func_update}}) {
+			my $update = $f . "_update";
+			my $d = $f;
+			logger("Calling $update()") unless !$options{d};
+
+			undef($d) if(!grep {trim($_) eq $d} (@{$config{debug}}));
+			if(defined($options{d}) && $options{d} eq "all") {
+				$d = $f;
+			}
+
+			{
+				no strict "refs";
+				eval { &$update($f, \%config, $d); };
+				if($@) {
+					logger("$update(): $@");
+				}
+			}
+		}
+
+		# TRAFFACCT graph daily reports
+		if(lc($config{traffacct}->{enabled}) eq "y") {
+			my $d = "traffacct";
+			undef($d) if(!grep {trim($_) eq $d} (@{$config{debug}}));
+
+			# at 00:00h
+			if($min == 0 && $hour == 0) {
+
+				# collect traffic accounting every day
+				eval { traffacct::traffacct_getcounters(\%config, $d); };
+				if($@) {
+					logger("traffacct::traffacct_getcounters(): $@");
+				}
+
+				# send reports every first day of a month
+				if(lc($config{traffacct}->{reports}->{enabled}) eq "y") {
+					if($mday == 1) {
+						eval { traffacct::traffacct_sendreports(\%config, $d); };
+						if($@) {
+							logger("traffacct::traffacct_sendreports(): $@");
+						}
+					}
+				}
+			}
+		}
+
+		# Email Reports
+		if(lc($config{emailreports}->{enabled}) eq "y") {
+			my $emailreports = $config{emailreports};
+			my $m = $emailreports->{minute} || 0;
+			my $h = $emailreports->{hour} || 0;
+			my $d = "emailreports";
+			undef($d) if(!grep {trim($_) eq $d} (@{$config{debug}}));
+
+			if($min == $m && $hour == $h) {
+
+				eval "use emailreports qw(emailreports_send)";
+				if($@) {
+					logger("WARNING: unable to load module 'emailreports'. $@");
+					next;
+				}
+
+				# daily
+				if(lc($emailreports->{daily}->{enabled}) eq "y") {
+					eval { emailreports::emailreports_send(\%config, "daily", "1day", $d); };
+					if($@) {
+						logger("emailreports::emailreports_send(): $@");
+					}
+				}
+
+				# weekly (send reports on every Monday)
+				if($wday == 1) {
+					if(lc($emailreports->{weekly}->{enabled}) eq "y") {
+						eval { emailreports::emailreports_send(\%config, "weekly", "1week", $d); };
+						if($@) {
+							logger("emailreports::emailreports_send(): $@");
+						}
+					}
+				}
+
+				# monthly (send reports every first day of each month)
+				if($mday == 1) {
+					if(lc($emailreports->{monthly}->{enabled}) eq "y") {
+						eval { emailreports::emailreports_send(\%config, "monthly", "1month", $d); };
+						if($@) {
+							logger("emailreports::emailreports_send(): $@");
+						}
+					}
+				}
+
+				# yearly (send reports every first day of each year)
+				if($mon == 0 && $mday == 1) {
+					if(lc($emailreports->{yearly}->{enabled}) eq "y") {
+						eval { emailreports::emailreports_send(\%config, "yearly", "1year", $d); };
+						if($@) {
+							logger("emailreports::emailreports_send(): $@");
+						}
+					}
+				}
+			}
+		}
+	}
 }

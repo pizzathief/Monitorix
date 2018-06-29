@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -36,8 +36,14 @@ sub lighttpd_init {
 
 	my $info;
 	my @ds;
+	my @rra;
 	my @tmp;
 	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
 
 	if(!scalar(my @ll = split(',', $lighttpd->{list}))) {
 		logger("$myself: ERROR: missing or not defined 'list' option.");
@@ -52,15 +58,30 @@ sub lighttpd_init {
 					push(@ds, substr($key, 3, index($key, ']') - 3));
 				}
 			}
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
 		}
 		if(scalar(@ds) / 9 != scalar(my @ll = split(',', $lighttpd->{list}))) {
-			logger("Detected size mismatch between 'list' option (" . scalar(my @ll = split(',', $lighttpd->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historic data will be lost. Backup file created.");
+			logger("$myself: Detected size mismatch between 'list' (" . scalar(my @ll = split(',', $lighttpd->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 	}
 
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		for($n = 0; $n < scalar(my @ll = split(',', $lighttpd->{list})); $n++) {
 			push(@tmp, "DS:lighttpd" . $n . "_acc:GAUGE:120:0:U");
 			push(@tmp, "DS:lighttpd" . $n . "_kb:GAUGE:120:0:U");
@@ -79,19 +100,19 @@ sub lighttpd_init {
 				"RRA:AVERAGE:0.5:1:1440",
 				"RRA:AVERAGE:0.5:30:336",
 				"RRA:AVERAGE:0.5:60:744",
-				"RRA:AVERAGE:0.5:1440:365",
+				@average,
 				"RRA:MIN:0.5:1:1440",
 				"RRA:MIN:0.5:30:336",
 				"RRA:MIN:0.5:60:744",
-				"RRA:MIN:0.5:1440:365",
+				@min,
 				"RRA:MAX:0.5:1:1440",
 				"RRA:MAX:0.5:30:336",
 				"RRA:MAX:0.5:60:744",
-				"RRA:MAX:0.5:1440:365",
+				@max,
 				"RRA:LAST:0.5:1:1440",
 				"RRA:LAST:0.5:30:336",
 				"RRA:LAST:0.5:60:744",
-				"RRA:LAST:0.5:1440:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -123,8 +144,14 @@ sub lighttpd_update {
 
 	my $n = 0;
 	foreach(my @ll = split(',', $lighttpd->{list})) {
-		my $url = trim($_) . "/server-status?auto";
-		my $ua = LWP::UserAgent->new(timeout => 30);
+		my $url = trim($_);
+		my $ssl = "";
+
+		$ssl = "ssl_opts => {verify_hostname => 0}"
+			if lc($config->{accept_selfsigned_certs}) eq "y";
+
+		my $ua = LWP::UserAgent->new(timeout => 30, $ssl);
+		$ua->agent($config->{user_agent_id}) if $config->{user_agent_id} || "";
 		my $response = $ua->request(HTTP::Request->new('GET', $url));
 
 		if(!$response->is_success) {
@@ -173,21 +200,32 @@ sub lighttpd_update {
 
 sub lighttpd_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $lighttpd = $config->{lighttpd};
-	my @rigid = split(',', $lighttpd->{rigid});
-	my @limit = split(',', $lighttpd->{limit});
+	my @rigid = split(',', ($lighttpd->{rigid} || ""));
+	my @limit = split(',', ($lighttpd->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
 	my $height;
 	my @riglim;
-	my @PNG;
-	my @PNGz;
+	my @IMG;
+	my @IMGz;
 	my @tmp;
 	my @tmpz;
 	my @CDEF;
@@ -199,9 +237,12 @@ sub lighttpd_cgi {
 	my $str;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -214,33 +255,33 @@ sub lighttpd_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line1;
 		my $line2;
 		my $line3;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		for($n = 0; $n < scalar(my @ll = split(',', $lighttpd->{list})); $n++) {
 			$line1 = "                                    ";
 			$line2 .= "   Acceses    k$vlabel    Busy  Idle";
 			$line3 .= "------------------------------------";
 			if($line1) {
 				my $i = length($line1);
-				printf(sprintf("%${i}s", sprintf("%s", trim($ll[$n]))));
+				push(@output, sprintf(sprintf("%${i}s", sprintf("%s", trim($ll[$n])))));
 			}
 		}
-		print("\n");
-		print("Time$line2\n");
-		print("----$line3 \n");
+		push(@output, "\n");
+		push(@output, "Time$line2\n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -250,24 +291,24 @@ sub lighttpd_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc}", $time);
+			push(@output, sprintf(" %2d$tf->{tc}", $time));
 			for($n2 = 0; $n2 < scalar(my @ll = split(',', $lighttpd->{list})); $n2++) {
 				undef(@row);
 				$from = $n2 * 9;
 				$to = $from + 9;
 				push(@row, @$line[$from..$to]);
-				printf("   %7d  %9d      %3d   %3d", @row);
+				push(@output, sprintf("   %7d  %9d      %3d   %3d", @row));
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -284,13 +325,13 @@ sub lighttpd_cgi {
 
 	for($n = 0; $n < scalar(my @ll = split(',', $lighttpd->{list})); $n++) {
 		for($n2 = 1; $n2 <= 3; $n2++) {
-			$str = $u . $package . $n . $n2 . "." . $tf->{when} . ".png";
-			push(@PNG, $str);
-			unlink("$PNG_DIR" . $str);
+			$str = $u . $package . $n . $n2 . "." . $tf->{when} . ".$imgfmt_lc";
+			push(@IMG, $str);
+			unlink("$IMG_DIR" . $str);
 			if(lc($config->{enable_zoom}) eq "y") {
-				$str = $u . $package . $n . $n2 . "z." . $tf->{when} . ".png";
-				push(@PNGz, $str);
-				unlink("$PNG_DIR" . $str);
+				$str = $u . $package . $n . $n2 . "z." . $tf->{when} . ".$imgfmt_lc";
+				push(@IMGz, $str);
+				unlink("$IMG_DIR" . $str);
 			}
 		}
 	}
@@ -298,26 +339,19 @@ sub lighttpd_cgi {
 	$e = 0;
 	foreach my $url (my @ll = split(',', $lighttpd->{list})) {
 		if($e) {
-			print("  <br>\n");
+			push(@output, "  <br>\n");
 		}
 		if($title) {
-			main::graph_header($title, 2);
+			push(@output, main::graph_header($title, 2));
 		}
-		undef(@riglim);
-		if(trim($rigid[0]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-		} else {
-			if(trim($rigid[0]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[0]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[0], $limit[0])};
 		if($title) {
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "AREA:lighttpd" . $e . "_idle#4444EE:Idle");
 		push(@tmp, "GPRINT:lighttpd" . $e . "_idle:LAST:            Current\\: %3.0lf");
 		push(@tmp, "GPRINT:lighttpd" . $e . "_idle:AVERAGE:   Average\\: %3.0lf");
@@ -336,79 +370,86 @@ sub lighttpd_cgi {
 		push(@tmpz, "LINE2:lighttpd" . $e . "_idle#0000EE");
 		push(@tmpz, "LINE2:lighttpd" . $e . "_busy#00EEEE");
 		push(@tmpz, "LINE2:lighttpd" . $e . "_tot#EE0000");
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{main});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
 			($width, $height) = split('x', $config->{graph_size}->{main}) if $silent eq "imagetagbig";
 			@tmp = @tmpz;
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 3]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 3]",
 			"--title=$config->{graphs}->{_lighttpd1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Workers",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:lighttpd" . $e . "_busy=$rrd:lighttpd" . $e . "_busy:AVERAGE",
 			"DEF:lighttpd" . $e . "_idle=$rrd:lighttpd" . $e . "_idle:AVERAGE",
 			"CDEF:lighttpd" . $e . "_tot=lighttpd" . $e . "_busy,lighttpd" . $e . "_idle,+",
+			"CDEF:allvalues=lighttpd" . $e . "_busy,lighttpd" . $e . "_idle,lighttpd" . $e . "_tot,+,+",
+			@CDEF,
 			"COMMENT: \\n",
 			@tmp,
 			"COMMENT: \\n",
 			"COMMENT: \\n");
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 3]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 3]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 3]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 3]",
 				"--title=$config->{graphs}->{_lighttpd1}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Workers",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$colors->{graph_colors}},
 				"DEF:lighttpd" . $e . "_busy=$rrd:lighttpd" . $e . "_busy:AVERAGE",
 				"DEF:lighttpd" . $e . "_idle=$rrd:lighttpd" . $e . "_idle:AVERAGE",
 				"CDEF:lighttpd" . $e . "_tot=lighttpd" . $e . "_busy,lighttpd" . $e . "_idle,+",
+				"CDEF:allvalues=lighttpd" . $e . "_busy,lighttpd" . $e . "_idle,lighttpd" . $e . "_tot,+,+",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 3]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 3]: $err\n") if $err;
 		}
 		$e2 = $e + 1;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /lighttpd$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3] . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 		}
-		undef(@riglim);
-		if(trim($rigid[1]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[1]));
-		} else {
-			if(trim($rigid[1]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[1]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[1], $limit[1])};
 		undef(@tmp);
 		undef(@tmpz);
 		undef(@CDEF);
@@ -422,6 +463,11 @@ sub lighttpd_cgi {
 		} else {
 			push(@CDEF, "CDEF:Bytes=lighttpd" . $e . "_kb,1024,*");
 		}
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{small});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -431,73 +477,79 @@ sub lighttpd_cgi {
 			push(@tmp, "COMMENT: \\n");
 			push(@tmp, "COMMENT: \\n");
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 3 + 1]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 3 + 1]",
 			"--title=$config->{graphs}->{_lighttpd2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:lighttpd" . $e . "_kb=$rrd:lighttpd" . $e . "_kb:AVERAGE",
+			"CDEF:allvalues=lighttpd" . $e . "_kb",
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 3 + 1]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 3 + 1]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 3 + 1]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 3 + 1]",
 				"--title=$config->{graphs}->{_lighttpd2}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:lighttpd" . $e . "_kb=$rrd:lighttpd" . $e . "_kb:AVERAGE",
+				"CDEF:allvalues=lighttpd" . $e . "_kb",
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 3 + 1]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 3 + 1]: $err\n") if $err;
 		}
 		$e2 = $e + 2;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /lighttpd$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 1] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3 + 1] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 1] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 1] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 1] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 1] . "'>\n");
 			}
 		}
 
-		undef(@riglim);
-		if(trim($rigid[2]) eq 1) {
-			push(@riglim, "--upper-limit=" . trim($limit[2]));
-		} else {
-			if(trim($rigid[2]) eq 2) {
-				push(@riglim, "--upper-limit=" . trim($limit[2]));
-				push(@riglim, "--rigid");
-			}
-		}
+		@riglim = @{setup_riglim($rigid[2], $limit[2])};
 		undef(@tmp);
 		undef(@tmpz);
+		undef(@CDEF);
 		push(@tmp, "AREA:lighttpd" . $e . "_acc#44EE44:Accesses");
 		push(@tmp, "GPRINT:lighttpd" . $e . "_acc:LAST:             Current\\: %5.2lf\\n");
 		push(@tmp, "LINE1:lighttpd" . $e . "_acc#00EE00");
 		push(@tmpz, "AREA:lighttpd" . $e . "_acc#44EE44:Accesses");
 		push(@tmpz, "LINE1:lighttpd" . $e . "_acc#00EE00");
+		if(lc($config->{show_gaps}) eq "y") {
+			push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+			push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+			push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+		}
 		($width, $height) = split('x', $config->{graph_size}->{small});
 		if($silent =~ /imagetag/) {
 			($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -507,73 +559,83 @@ sub lighttpd_cgi {
 			push(@tmp, "COMMENT: \\n");
 			push(@tmp, "COMMENT: \\n");
 		}
-		RRDs::graph("$PNG_DIR" . "$PNG[$e * 3 + 2]",
+		$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e * 3 + 2]",
 			"--title=$config->{graphs}->{_lighttpd3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=Accesses/s",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
 			"DEF:lighttpd" . $e . "_acc=$rrd:lighttpd" . $e . "_acc:AVERAGE",
+			"CDEF:allvalues=lighttpd" . $e . "_acc",
+			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG[$e * 3 + 2]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 3 + 2]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
-			RRDs::graph("$PNG_DIR" . "$PNGz[$e * 3 + 2]",
+			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 3 + 2]",
 				"--title=$config->{graphs}->{_lighttpd3}  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
-				"--imgformat=PNG",
+				"--imgformat=$imgfmt_uc",
 				"--vertical-label=Accesses/s",
 				"--width=$width",
 				"--height=$height",
 				@riglim,
-				"--lower-limit=0",
+				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
 				"DEF:lighttpd" . $e . "_acc=$rrd:lighttpd" . $e . "_acc:AVERAGE",
+				"CDEF:allvalues=lighttpd" . $e . "_acc",
+				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $PNG_DIR" . "$PNGz[$e * 3 + 2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 3 + 2]: $err\n") if $err;
 		}
 		$e2 = $e + 3;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /lighttpd$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 2] . "' border='0'></a>\n");
-				}
-				else {
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNGz[$e * 3 + 2] . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 2] . "' border='0'></a>\n");
+				} else {
+					if($version eq "new") {
+						$picz_width = $picz->{image_width} * $config->{global_zoom};
+						$picz_height = $picz->{image_height} * $config->{global_zoom};
+					} else {
+						$picz_width = $width + 115;
+						$picz_height = $height + 100;
+					}
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 3 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 2] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG[$e * 3 + 2] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 3 + 2] . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
 
-			print("    <tr>\n");
-			print "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n";
-			print "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
-			print "       <font size='-1'>\n";
-			print "        <b style='{color: " . $colors->{title_fg_color} . "}'>&nbsp;&nbsp;" . trim($url) . "<b>\n";
-			print "       </font></font>\n";
-			print "      </td>\n";
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    <tr>\n");
+			push(@output, "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n");
+			push(@output, "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n");
+			push(@output, "       <font size='-1'>\n");
+			push(@output, "        <b>&nbsp;&nbsp;<a href='" . trim($url) . "' style='color: " . $colors->{title_fg_color} . "'>" . trim($url) . "</a></b>\n");
+			push(@output, "       </font></font>\n");
+			push(@output, "      </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
 		$e++;
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

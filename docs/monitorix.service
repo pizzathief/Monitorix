@@ -1,10 +1,13 @@
 [Unit]
 Description=Monitorix
+Documentation=man:monitorix(8)
 Wants=local-fs.target
+After=multi-user.target
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/monitorix -c /etc/monitorix.conf -p /run/monitorix.pid
+EnvironmentFile=-/etc/sysconfig/monitorix
+ExecStart=/usr/bin/monitorix -c /etc/monitorix/monitorix.conf -p /run/monitorix.pid
 PIDFile=/run/monitorix.pid
 
 [Install]

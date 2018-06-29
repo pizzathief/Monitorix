@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2013 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -33,8 +33,39 @@ sub serv_init {
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 
+	my $info;
+	my @rra;
+	my @tmp;
+	my $n;
+
+	my @average;
+	my @min;
+	my @max;
+	my @last;
+
+	if(-e $rrd) {
+		$info = RRDs::info($rrd);
+		for my $key (keys %$info) {
+			if(index($key, 'rra[') == 0) {
+				if(index($key, '.rows') != -1) {
+					push(@rra, substr($key, 4, index($key, ']') - 4));
+				}
+			}
+		}
+		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
+			logger("$myself: Detected size mismatch between 'max_historic_years' (" . $config->{max_historic_years} . ") and $rrd (" . ((scalar(@rra) -12) / 4) . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+			rename($rrd, "$rrd.bak");
+		}
+	}
+
 	if(!(-e $rrd)) {
 		logger("Creating '$rrd' file.");
+		for($n = 1; $n <= $config->{max_historic_years}; $n++) {
+			push(@average, "RRA:AVERAGE:0.5:1440:" . (365 * $n));
+			push(@min, "RRA:MIN:0.5:1440:" . (365 * $n));
+			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
+			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
+		}
 		eval {
 			RRDs::create($rrd,
 				"--step=300",
@@ -73,19 +104,19 @@ sub serv_init {
 				"RRA:AVERAGE:0.5:1:288",
 				"RRA:AVERAGE:0.5:6:336",
 				"RRA:AVERAGE:0.5:12:744",
-				"RRA:AVERAGE:0.5:288:365",
+				@average,
 				"RRA:MIN:0.5:1:288",
 				"RRA:MIN:0.5:6:336",
 				"RRA:MIN:0.5:12:744",
-				"RRA:MIN:0.5:288:365",
+				@min,
 				"RRA:MAX:0.5:1:288",
 				"RRA:MAX:0.5:6:336",
 				"RRA:MAX:0.5:12:744",
-				"RRA:MAX:0.5:288:365",
+				@max,
 				"RRA:LAST:0.5:1:288",
 				"RRA:LAST:0.5:6:336",
 				"RRA:LAST:0.5:12:744",
-				"RRA:LAST:0.5:288:365",
+				@last,
 			);
 		};
 		my $err = RRDs::error;
@@ -128,16 +159,80 @@ sub serv_update {
 	my $val04 = 0;
 	my $val05 = 0;
 
+	my $secure_seek_pos;
+	my $imap_seek_pos;
+	my $mail_seek_pos;
+	my $sa_seek_pos;
+	my $clamav_seek_pos;
+	my $logsize;
+
 	my $date;
+	my $hour;
 	my $rrdata = "N";
 
-	# This graph is refreshed only every 5 minutes
+	# this graph is refreshed only every 5 minutes
 	my (undef, $min) = localtime(time);
-#	return if($min % 5);
+	return if($min % 5);
+
+	$ssh = $config->{serv_hist}->{'i_ssh'} || 0;
+	$ftp = $config->{serv_hist}->{'i_ftp'} || 0;
+	$telnet = $config->{serv_hist}->{'i_telnet'} || 0;
+	$imap = $config->{serv_hist}->{'i_imap'} || 0;
+	$pop3 = $config->{serv_hist}->{'i_pop3'} || 0;
+	$smtp = $config->{serv_hist}->{'i_smtp'} || 0;
+	$spam = $config->{serv_hist}->{'i_spam'} || 0;
+	$virus = $config->{serv_hist}->{'i_virus'} || 0;
+
+	# zero all values on every new day
+	$hour = int(strftime("%H", localtime));
+	if(!defined($config->{serv_hist}->{'hour'})) {
+		$config->{serv_hist}->{'hour'} = $hour;
+	} else {
+		if($hour < $config->{serv_hist}->{'hour'}) {
+			$ssh = 0;
+			$ftp = 0;
+			$telnet = 0;
+			$imap = 0;
+			$smb = 0;
+			$fax = 0;
+			$cups = 0;
+			$pop3 = 0;
+			$smtp = 0;
+			$spam = 0;
+			$virus = 0;
+			$f2b = 0;
+			$val02 = 0;
+			$val03 = 0;
+			$val04 = 0;
+			$val05 = 0;
+		}
+		$config->{serv_hist}->{'hour'} = $hour;
+	}
 
 	if(-r $config->{secure_log}) {
 		$date = strftime("%b %e", localtime);
+		$config->{secure_log_date_format} = $config->{secure_log_date_format} || "%b %e";
+		my $date2 = strftime($config->{secure_log_date_format}, localtime);
+
+		$secure_seek_pos = $config->{serv_hist}->{'secure_seek_pos'} || 0;
+		$secure_seek_pos = defined($secure_seek_pos) ? int($secure_seek_pos) : 0;
+
 		open(IN, "$config->{secure_log}");
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{secure_log}': $!");
+			close(IN);
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $secure_seek_pos) {
+			$secure_seek_pos = 0;
+		}
+		if(!seek(IN, $secure_seek_pos, 0)) {
+			logger("Couldn't seek to $secure_seek_pos in '$config->{secure_log}': $!");
+			close(IN);
+			return;
+		}
+
 		while(<IN>) {
 			if(/^$date/) {
 				if(/ sshd\[/ && /Accepted /) {
@@ -157,20 +252,59 @@ sub serv_update {
 					}
 				}
 			}
+			if(/$date2/) {
+				# ProFTPD log
+				if(/START: ftp/ || (/ proftpd\[/ && /Login successful./) || /\"PASS .*\" 230/) {
+					$ftp++;
+					next;
+				}
+				# vsftpd log
+				if(/OK LOGIN:/) {
+					$ftp++;
+					next;
+				}
+				# Pure-FTPd log
+				if(/ \[INFO\] .*? is now logged in/) {
+					$ftp++;
+					next;
+				}
+			}
 		}
 		close(IN);
+		$config->{serv_hist}->{'secure_seek_pos'} = $logsize;
 	}
 
 	if(-r $config->{imap_log}) {
 		$config->{imap_log_date_format} = $config->{imap_log_date_format} || "%b %d";
 		my $date_dovecot = strftime($config->{imap_log_date_format}, localtime);
-		my $date_uw = strftime("%b %e %T", localtime);
+		my $date_uw = strftime("%b %e", localtime);
+
+		$imap_seek_pos = $config->{serv_hist}->{'imap_seek_pos'} || 0;
+		$imap_seek_pos = defined($imap_seek_pos) ? int($imap_seek_pos) : 0;
 		open(IN, "$config->{imap_log}");
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{imap_log}': $!");
+			close(IN);
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $imap_seek_pos) {
+			$imap_seek_pos = 0;
+		}
+		if(!seek(IN, $imap_seek_pos, 0)) {
+			logger("Couldn't seek to $imap_seek_pos in '$config->{imap_log}': $!");
+			close(IN);
+			return;
+		}
+
 		while(<IN>) {
 			# UW-IMAP log
 			if(/$date_uw/) {
 				if(/ imapd\[/ && / Login user=/) {
 					$imap++;
+				}
+				if(/ ipop3d\[/ && / Login user=/) {
+					$pop3++;
 				}
 			}
 			# Dovecot log
@@ -184,6 +318,7 @@ sub serv_update {
 			}
 		}
 		close(IN);
+		$config->{serv_hist}->{'imap_seek_pos'} = $logsize;
 	}
 
 	my $smb_L = 0;
@@ -236,32 +371,11 @@ sub serv_update {
 		close(IN);
 	}
 
-	if(-r $config->{secure_log}) {
-		$config->{secure_log_date_format} = $config->{secure_log_date_format} || "%b %e";
-		my $date = strftime($config->{secure_log_date_format}, localtime);
-		open(IN, "$config->{secure_log}");
-		while(<IN>) {
-			if(/$date/) {
-				# ProFTPD log
-				if(/START: ftp/ || (/ proftpd\[/ && /Login successful./) || /\"PASS .*\" 230/) {
-					$ftp++;
-					next;
-				}
-				# vsftpd log
-				if(/OK LOGIN:/) {
-					$ftp++;
-					next;
-				}
-			}
-		}
-		close(IN);
-	}
-
 	if(-r $config->{fail2ban_log}) {
 		$date = strftime("%Y-%m-%d", localtime);
 		open(IN, $config->{fail2ban_log});
 		while(<IN>) {
-			if(/^$date/ && / fail2ban/ && / WARNING / && / Ban /) {
+			if(/^$date/ && / fail2ban.actions/ && / Ban /) {
 				$f2b++;
 			}
 		}
@@ -270,7 +384,25 @@ sub serv_update {
 
 	if(-r $config->{mail_log}) {
 		$date = strftime("%b %e", localtime);
+
+		$mail_seek_pos = $config->{serv_hist}->{'mail_seek_pos'} || 0;
+		$mail_seek_pos = defined($mail_seek_pos) ? int($mail_seek_pos) :0;
 		open(IN, "$config->{mail_log}");
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{mail_log}': $!");
+			close(IN);
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $mail_seek_pos) {
+			$mail_seek_pos = 0;
+		}
+		if(!seek(IN, $mail_seek_pos, 0)) {
+			logger("Couldn't seek to $mail_seek_pos in '$config->{mail_log}': $!");
+			close(IN);
+			return;
+		}
+
 		while(<IN>) {
 			if(/^$date/) {
 				if(/to=/ && /stat(us)?=sent/i) {
@@ -282,9 +414,16 @@ sub serv_update {
 				if(/MailScanner/ && /Virus Scanning:/ && /Found/ && /viruses/) {
 					$virus++;
 				}
+				if(/amavis\[.* SPAM/) {
+					$spam++;
+				}
+				if(/amavis\[.* INFECTED|amavis\[.* BANNED/) {
+					$virus++;
+				}
 			}
 		}
 		close(IN);
+		$config->{serv_hist}->{'mail_seek_pos'} = $logsize;
 	}
 
 	$date = strftime("%Y-%m-%d", localtime);
@@ -306,27 +445,81 @@ sub serv_update {
 
 	if(-r $config->{spamassassin_log}) {
 		$date = strftime("%b %e", localtime);
-		open(IN, $config->{spamassassin_log});
+
+		$sa_seek_pos = $config->{serv_hist}->{'sa_seek_pos'} || 0;
+		$sa_seek_pos = defined($sa_seek_pos) ? int($sa_seek_pos) :0;
+		open(IN, "$config->{spamassassin_log}");
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{spamassassin_log}': $!");
+			close(IN);
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $sa_seek_pos) {
+			$sa_seek_pos = 0;
+		}
+		if(!seek(IN, $sa_seek_pos, 0)) {
+			logger("Couldn't seek to $sa_seek_pos in '$config->{spamassassin_log}': $!");
+			close(IN);
+			return;
+		}
+
 		while(<IN>) {
 			if(/^$date/ && /spamd: identified spam/) {
 				$spam++;
 			}
 		}
 		close(IN);
+		$config->{serv_hist}->{'sa_seek_pos'} = $logsize;
 	}
 
 	if(-r $config->{clamav_log}) {
 		$date = strftime("%a %b %e", localtime);
-		open(IN, $config->{clamav_log});
+
+		$clamav_seek_pos = $config->{serv_hist}->{'clamav_seek_pos'} || 0;
+		$clamav_seek_pos = defined($clamav_seek_pos) ? int($clamav_seek_pos) :0;
+		open(IN, "$config->{clamav_log}");
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{clamav_log}': $!");
+			close(IN);
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $clamav_seek_pos) {
+			$clamav_seek_pos = 0;
+		}
+		if(!seek(IN, $clamav_seek_pos, 0)) {
+			logger("Couldn't seek to $clamav_seek_pos in '$config->{clamav_log}': $!");
+			close(IN);
+			return;
+		}
+
 		while(<IN>) {
 			if(/^$date/ && / FOUND/) {
 				$virus++;
 			}
 		}
 		close(IN);
+		$config->{serv_hist}->{'clamav_seek_pos'} = $logsize;
 	}
 
 	# I data (incremental)
+	$config->{serv_hist}->{'i_ssh'} = $ssh;
+	$config->{serv_hist}->{'i_ftp'} = $ftp;
+	$config->{serv_hist}->{'i_telnet'} = $telnet;
+	$config->{serv_hist}->{'i_imap'} = $imap;
+	$config->{serv_hist}->{'i_smb'} = $smb;
+	$config->{serv_hist}->{'i_fax'} = $fax;
+	$config->{serv_hist}->{'i_cups'} = $cups;
+	$config->{serv_hist}->{'i_pop3'} = $pop3;
+	$config->{serv_hist}->{'i_smtp'} = $smtp;
+	$config->{serv_hist}->{'i_spam'} = $spam;
+	$config->{serv_hist}->{'i_virus'} = $virus;
+	$config->{serv_hist}->{'i_f2b'} = $f2b;
+	$config->{serv_hist}->{'i_val02'} = $val02;
+	$config->{serv_hist}->{'i_val03'} = $val03;
+	$config->{serv_hist}->{'i_val04'} = $val04;
+	$config->{serv_hist}->{'i_val05'} = $val05;
 	$rrdata .= ":$ssh:$ftp:$telnet:$imap:$smb:$fax:$cups:$pop3:$smtp:$spam:$virus:$f2b:$val02:$val03:$val04:$val05";
 
 	# L data (load)
@@ -347,85 +540,85 @@ sub serv_update {
 	my $l_val04 = 0;
 	my $l_val05 = 0;
 
-	$l_ssh = $ssh - ($config->{serv_hist}->{'ssh'} || 0);
+	$l_ssh = $ssh - ($config->{serv_hist}->{'l_ssh'} || 0);
 	$l_ssh = 0 unless $l_ssh != $ssh;
 	$l_ssh /= 300;
-	$config->{serv_hist}->{'ssh'} = $ssh;
+	$config->{serv_hist}->{'l_ssh'} = $ssh;
 
-	$l_ftp = $ftp - ($config->{serv_hist}->{'ftp'} || 0);
+	$l_ftp = $ftp - ($config->{serv_hist}->{'l_ftp'} || 0);
 	$l_ftp = 0 unless $l_ftp != $ftp;
 	$l_ftp /= 300;
-	$config->{serv_hist}->{'ftp'} = $ftp;
+	$config->{serv_hist}->{'l_ftp'} = $ftp;
 
-	$l_telnet = $telnet - ($config->{serv_hist}->{'telnet'} || 0);
+	$l_telnet = $telnet - ($config->{serv_hist}->{'l_telnet'} || 0);
 	$l_telnet = 0 unless $l_telnet != $telnet;
 	$l_telnet /= 300;
-	$config->{serv_hist}->{'telnet'} = $telnet;
+	$config->{serv_hist}->{'l_telnet'} = $telnet;
 
-	$l_imap = $imap - ($config->{serv_hist}->{'imap'} || 0);
+	$l_imap = $imap - ($config->{serv_hist}->{'l_imap'} || 0);
 	$l_imap = 0 unless $l_imap != $imap;
 	$l_imap /= 300;
-	$config->{serv_hist}->{'imap'} = $imap;
+	$config->{serv_hist}->{'l_imap'} = $imap;
 
-	$l_smb = $smb - ($config->{serv_hist}->{'smb'} || 0);
+	$l_smb = $smb - ($config->{serv_hist}->{'l_smb'} || 0);
 	$l_smb = 0 unless $l_smb != $smb;
 	$l_smb /= 300;
-	$config->{serv_hist}->{'smb'} = $smb;
+	$config->{serv_hist}->{'l_smb'} = $smb;
 
-	$l_fax = $fax - ($config->{serv_hist}->{'fax'} || 0);
+	$l_fax = $fax - ($config->{serv_hist}->{'l_fax'} || 0);
 	$l_fax = 0 unless $l_fax != $fax;
 	$l_fax /= 300;
-	$config->{serv_hist}->{'fax'} = $fax;
+	$config->{serv_hist}->{'l_fax'} = $fax;
 
-	$l_cups = $cups - ($config->{serv_hist}->{'cups'} || 0);
+	$l_cups = $cups - ($config->{serv_hist}->{'l_cups'} || 0);
 	$l_cups = 0 unless $l_cups != $cups;
 	$l_cups /= 300;
-	$config->{serv_hist}->{'cups'} = $cups;
+	$config->{serv_hist}->{'l_cups'} = $cups;
 
-	$l_pop3 = $pop3 - ($config->{serv_hist}->{'pop3'} || 0);
+	$l_pop3 = $pop3 - ($config->{serv_hist}->{'l_pop3'} || 0);
 	$l_pop3 = 0 unless $l_pop3 != $pop3;
 	$l_pop3 /= 300;
-	$config->{serv_hist}->{'pop3'} = $pop3;
+	$config->{serv_hist}->{'l_pop3'} = $pop3;
 
-	$l_smtp = $smtp - ($config->{serv_hist}->{'smtp'} || 0);
+	$l_smtp = $smtp - ($config->{serv_hist}->{'l_smtp'} || 0);
 	$l_smtp = 0 unless $l_smtp != $smtp;
 	$l_smtp /= 300;
-	$config->{serv_hist}->{'smtp'} = $smtp;
+	$config->{serv_hist}->{'l_smtp'} = $smtp;
 
-	$l_spam = $spam - ($config->{serv_hist}->{'spam'} || 0);
+	$l_spam = $spam - ($config->{serv_hist}->{'l_spam'} || 0);
 	$l_spam = 0 unless $l_spam != $spam;
 	$l_spam /= 300;
-	$config->{serv_hist}->{'spam'} = $spam;
+	$config->{serv_hist}->{'l_spam'} = $spam;
 
-	$l_virus = $virus - ($config->{serv_hist}->{'virus'} || 0);
+	$l_virus = $virus - ($config->{serv_hist}->{'l_virus'} || 0);
 	$l_virus = 0 unless $l_virus != $virus;
 	$l_virus /= 300;
-	$config->{serv_hist}->{'virus'} = $virus;
+	$config->{serv_hist}->{'l_virus'} = $virus;
 
-	$l_f2b = $f2b - ($config->{serv_hist}->{'f2b'} || 0);
+	$l_f2b = $f2b - ($config->{serv_hist}->{'l_f2b'} || 0);
 	$l_f2b = 0 unless $l_f2b != $f2b;
 	$l_f2b /= 300;
-	$config->{serv_hist}->{'f2b'} = $f2b;
+	$config->{serv_hist}->{'l_f2b'} = $f2b;
 
-	$l_val02 = $val02 - ($config->{serv_hist}->{'val02'} || 0);
+	$l_val02 = $val02 - ($config->{serv_hist}->{'l_val02'} || 0);
 	$l_val02 = 0 unless $l_val02 != $val02;
 	$l_val02 /= 300;
-	$config->{serv_hist}->{'val02'} = $val02;
+	$config->{serv_hist}->{'l_val02'} = $val02;
 
-	$l_val03 = $val03 - ($config->{serv_hist}->{'val03'} || 0);
+	$l_val03 = $val03 - ($config->{serv_hist}->{'l_val03'} || 0);
 	$l_val03 = 0 unless $l_val03 != $val03;
 	$l_val03 /= 300;
-	$config->{serv_hist}->{'val03'} = $val03;
+	$config->{serv_hist}->{'l_val03'} = $val03;
 
-	$l_val04 = $val04 - ($config->{serv_hist}->{'val04'} || 0);
+	$l_val04 = $val04 - ($config->{serv_hist}->{'l_val04'} || 0);
 	$l_val04 = 0 unless $l_val04 != $val04;
 	$l_val04 /= 300;
-	$config->{serv_hist}->{'val04'} = $val04;
+	$config->{serv_hist}->{'l_val04'} = $val04;
 
-	$l_val05 = $val05 - ($config->{serv_hist}->{'val05'} || 0);
+	$l_val05 = $val05 - ($config->{serv_hist}->{'l_val05'} || 0);
 	$l_val05 = 0 unless $l_val05 != $val05;
 	$l_val05 /= 300;
-	$config->{serv_hist}->{'val05'} = $val05;
+	$config->{serv_hist}->{'l_val05'} = $val05;
 
 	$rrdata .= ":$l_ssh:$l_ftp:$l_telnet:$l_imap:$l_smb:$l_fax:$l_cups:$l_pop3:$l_smtp:$l_spam:$l_virus:$l_f2b:$l_val02:$l_val03:$l_val04:$l_val05";
 	RRDs::update($rrd, $rrdata);
@@ -436,14 +629,25 @@ sub serv_update {
 
 sub serv_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $serv = $config->{serv};
-	my @rigid = split(',', $serv->{rigid});
-	my @limit = split(',', $serv->{limit});
+	my @rigid = split(',', ($serv->{rigid} || ""));
+	my @limit = split(',', ($serv->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
 	my $silent = $cgi->{silent};
+	my $zoom = "--zoom=" . $config->{global_zoom};
+	my %rrd = (
+		'new' => \&RRDs::graphv,
+		'old' => \&RRDs::graph,
+	);
+	my $version = "new";
+	my $pic;
+	my $picz;
+	my $picz_width;
+	my $picz_height;
 
 	my $u = "";
 	my $width;
@@ -452,13 +656,17 @@ sub serv_cgi {
 	my $vlabel;
 	my @tmp;
 	my @tmpz;
+	my @CDEF;
 	my $n;
 	my $str;
 	my $err;
 
+	$version = "old" if $RRDs::VERSION < 1.3;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
 	my $title = $config->{graph_title}->{$package};
-	my $PNG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
+	my $imgfmt_uc = uc($config->{image_format});
+	my $imgfmt_lc = lc($config->{image_format});
 
 	$title = !$silent ? $title : "";
 
@@ -467,22 +675,22 @@ sub serv_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		if(lc($serv->{mode}) eq "i") {
-			print "Values expressed as incremental or cumulative hits.\n";
+			push(@output, "Values expressed as incremental or cumulative hits.\n");
 		}
-		print("Time    SSH     FTP  Telnet   Samba     Fax    CUPS     F2B    IMAP    POP3    SMTP    Spam   Virus\n");
-		print("--------------------------------------------------------------------------------------------------- \n");
+		push(@output, "Time    SSH     FTP  Telnet   Samba     Fax    CUPS     F2B    IMAP    POP3    SMTP    Spam   Virus\n");
+		push(@output, "--------------------------------------------------------------------------------------------------- \n");
 		my $line;
 		my @row;
 		my $time;
@@ -498,19 +706,19 @@ sub serv_cgi {
 			my ($ssh, $ftp, $telnet, $imap, $smb, $fax, $cups, $pop3, $smtp, $spam, $virus, $f2b) = @$line[$from..$to];
 			@row = ($ssh, $ftp, $telnet, $imap, $smb, $fax, $cups, $f2b, $pop3, $smtp, $spam, $virus);
 			if(lc($serv->{mode}) eq "i") {
-				printf(" %2d$tf->{tc} %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d\n", $time, @row);
+				push(@output, sprintf(" %2d$tf->{tc} %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d  %6d\n", $time, @row));
 			} elsif(lc($serv->{mode}) eq "l") {
-				printf(" %2d$tf->{tc} %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f\n", $time, @row);
+				push(@output, sprintf(" %2d$tf->{tc} %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f  %6.2f\n", $time, @row));
 			}
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -525,32 +733,25 @@ sub serv_cgi {
 		$u = "";
 	}
 
-	my $PNG1 = $u . $package . "1." . $tf->{when} . ".png";
-	my $PNG2 = $u . $package . "2." . $tf->{when} . ".png";
-	my $PNG3 = $u . $package . "3." . $tf->{when} . ".png";
-	my $PNG1z = $u . $package . "1z." . $tf->{when} . ".png";
-	my $PNG2z = $u . $package . "2z." . $tf->{when} . ".png";
-	my $PNG3z = $u . $package . "3z." . $tf->{when} . ".png";
-	unlink ("$PNG_DIR" . "$PNG1",
-		"$PNG_DIR" . "$PNG2",
-		"$PNG_DIR" . "$PNG3");
+	my $IMG1 = $u . $package . "1." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2 = $u . $package . "2." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3 = $u . $package . "3." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG1z = $u . $package . "1z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG2z = $u . $package . "2z." . $tf->{when} . ".$imgfmt_lc";
+	my $IMG3z = $u . $package . "3z." . $tf->{when} . ".$imgfmt_lc";
+	unlink ("$IMG_DIR" . "$IMG1",
+		"$IMG_DIR" . "$IMG2",
+		"$IMG_DIR" . "$IMG3");
 	if(lc($config->{enable_zoom}) eq "y") {
-		unlink ("$PNG_DIR" . "$PNG1z",
-			"$PNG_DIR" . "$PNG2z",
-			"$PNG_DIR" . "$PNG3z");
+		unlink ("$IMG_DIR" . "$IMG1z",
+			"$IMG_DIR" . "$IMG2z",
+			"$IMG_DIR" . "$IMG3z");
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
-	if(trim($rigid[0]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[0]));
-	} else {
-		if(trim($rigid[0]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[0]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	if(lc($serv->{mode}) eq "l") {
 		$vlabel = "Accesses/s";
 		push(@tmp, "AREA:l_ssh#4444EE:SSH");
@@ -672,10 +873,15 @@ sub serv_cgi {
 		push(@tmpz, "LINE2:i_cups#444444");
 		push(@tmpz, "LINE2:i_f2b#EE4444");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
@@ -686,15 +892,15 @@ sub serv_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG1",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG1",
 		"--title=$config->{graphs}->{_serv1}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$colors->{graph_colors}},
 		"DEF:i_ssh=$rrd:serv_i_ssh:AVERAGE",
@@ -713,20 +919,22 @@ sub serv_cgi {
 		"DEF:l_fax=$rrd:serv_l_fax:AVERAGE",
 		"DEF:l_cups=$rrd:serv_l_cups:AVERAGE",
 		"DEF:l_f2b=$rrd:serv_l_f2b:AVERAGE",
+		"CDEF:allvalues=i_ssh,i_ftp,i_telnet,i_imap,i_smb,i_fax,i_cups,i_f2b,+,+,+,+,+,+,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG1z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 			"--title=$config->{graphs}->{_serv1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$colors->{graph_colors}},
 			"DEF:i_ssh=$rrd:serv_i_ssh:AVERAGE",
@@ -745,38 +953,39 @@ sub serv_cgi {
 			"DEF:l_fax=$rrd:serv_l_fax:AVERAGE",
 			"DEF:l_cups=$rrd:serv_l_cups:AVERAGE",
 			"DEF:l_f2b=$rrd:serv_l_f2b:AVERAGE",
+			"CDEF:allvalues=i_ssh,i_ftp,i_telnet,i_imap,i_smb,i_fax,i_cups,i_f2b,+,+,+,+,+,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /serv1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
-	undef(@riglim);
-	if(trim($rigid[1]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[1]));
-	} else {
-		if(trim($rigid[1]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[1]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	if(lc($serv->{mode}) eq "l") {
 		$vlabel = "Accesses/s";
 		push(@tmp, "AREA:l_imap#4444EE:IMAP");
@@ -802,6 +1011,11 @@ sub serv_cgi {
 		push(@tmpz, "LINE2:i_imap#4444EE:");
 		push(@tmpz, "LINE2:i_pop3#44EE44:");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -811,15 +1025,15 @@ sub serv_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG2",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG2",
 		"--title=$config->{graphs}->{_serv2}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -827,20 +1041,22 @@ sub serv_cgi {
 		"DEF:l_imap=$rrd:serv_l_imap:AVERAGE",
 		"DEF:i_pop3=$rrd:serv_i_pop3:AVERAGE",
 		"DEF:l_pop3=$rrd:serv_l_pop3:AVERAGE",
+		"CDEF:allvalues=i_imap,i_pop3,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG2z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
 			"--title=$config->{graphs}->{_serv2}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -848,34 +1064,35 @@ sub serv_cgi {
 			"DEF:l_imap=$rrd:serv_l_imap:AVERAGE",
 			"DEF:i_pop3=$rrd:serv_i_pop3:AVERAGE",
 			"DEF:l_pop3=$rrd:serv_l_pop3:AVERAGE",
+			"CDEF:allvalues=i_imap,i_pop3,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /serv2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
-	undef(@riglim);
-	if(trim($rigid[2]) eq 1) {
-		push(@riglim, "--upper-limit=" . trim($limit[2]));
-	} else {
-		if(trim($rigid[2]) eq 2) {
-			push(@riglim, "--upper-limit=" . trim($limit[2]));
-			push(@riglim, "--rigid");
-		}
-	}
+	@riglim = @{setup_riglim($rigid[2], $limit[2])};
 	undef(@tmp);
 	undef(@tmpz);
+	undef(@CDEF);
 	if(lc($serv->{mode}) eq "l") {
 		$vlabel = "Accesses/s";
 		push(@tmp, "AREA:l_smtp#44EEEE:SMTP");
@@ -913,6 +1130,11 @@ sub serv_cgi {
 		push(@tmpz, "LINE2:i_spam#EEEE44");
 		push(@tmpz, "LINE2:i_virus#EE4444");
 	}
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
 	($width, $height) = split('x', $config->{graph_size}->{small});
 	if($silent =~ /imagetag/) {
 		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
@@ -922,15 +1144,15 @@ sub serv_cgi {
 		push(@tmp, "COMMENT: \\n");
 		push(@tmp, "COMMENT: \\n");
 	}
-	RRDs::graph("$PNG_DIR" . "$PNG3",
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG3",
 		"--title=$config->{graphs}->{_serv3}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
-		"--imgformat=PNG",
+		"--imgformat=$imgfmt_uc",
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
 		@riglim,
-		"--lower-limit=0",
+		$zoom,
 		@{$cgi->{version12}},
 		@{$cgi->{version12_small}},
 		@{$colors->{graph_colors}},
@@ -940,21 +1162,23 @@ sub serv_cgi {
 		"DEF:l_smtp=$rrd:serv_l_smtp:AVERAGE",
 		"DEF:l_spam=$rrd:serv_l_spam:AVERAGE",
 		"DEF:l_virus=$rrd:serv_l_virus:AVERAGE",
+		"CDEF:allvalues=i_smtp,i_spam,i_virus,+,+",
+		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $PNG_DIR" . "$PNG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		undef(@tmp);
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
-		RRDs::graph("$PNG_DIR" . "$PNG3z",
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
 			"--title=$config->{graphs}->{_serv3}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
-			"--imgformat=PNG",
+			"--imgformat=$imgfmt_uc",
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
 			@riglim,
-			"--lower-limit=0",
+			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
 			@{$colors->{graph_colors}},
@@ -964,30 +1188,38 @@ sub serv_cgi {
 			"DEF:l_smtp=$rrd:serv_l_smtp:AVERAGE",
 			"DEF:l_spam=$rrd:serv_l_spam:AVERAGE",
 			"DEF:l_virus=$rrd:serv_l_virus:AVERAGE",
+			"CDEF:allvalues=i_smtp,i_spam,i_virus,+,+",
+			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $PNG_DIR" . "$PNG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /serv3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
-			}
-			else {
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3z . "','','width=" . ($width + 115) . ",height=" . ($height + 100) . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $PNG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;
